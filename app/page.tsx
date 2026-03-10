@@ -3,15 +3,20 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CaptionRow,
+  GenericRow,
   ImageRow,
   Profile,
   countCaptionVotes,
+  deleteTableRowByField,
   deleteCaption,
   deleteImage,
   getMyProfile,
+  insertTableRow,
   listCaptions,
   listImages,
   listProfiles,
+  listTableRows,
+  updateTableRowByField,
   updateCaptionPublic,
   updateImagePublic,
   updateProfileFlags,
@@ -21,6 +26,177 @@ import { missingSupabaseMessage, supabase } from "@/lib/supabase-browser";
 type DataTab = "profiles" | "images" | "captions";
 type TabKey = "overview" | DataTab;
 type PageState = Record<DataTab, number>;
+
+type DomainCapability = "read" | "update" | "crud";
+
+type DomainResource = {
+  key: string;
+  label: string;
+  table: string;
+  capability: DomainCapability;
+  pkField: string;
+  order?: string | null;
+  supportsUpload?: boolean;
+  previewFields?: string[];
+};
+
+const DOMAIN_RESOURCES: DomainResource[] = [
+  {
+    key: "users",
+    label: "Users",
+    table: "profiles",
+    capability: "read",
+    pkField: "id",
+    previewFields: ["id", "email", "first_name", "last_name", "is_superadmin"],
+  },
+  {
+    key: "images",
+    label: "Images",
+    table: "images",
+    capability: "crud",
+    pkField: "id",
+    supportsUpload: true,
+    previewFields: ["id", "profile_id", "url", "is_public", "created_datetime_utc"],
+  },
+  {
+    key: "humorFlavors",
+    label: "Humor Flavors",
+    table: "humor_flavors",
+    capability: "read",
+    pkField: "id",
+    previewFields: ["id", "slug", "description", "created_datetime_utc"],
+  },
+  {
+    key: "humorFlavorSteps",
+    label: "Humor Flavor Steps",
+    table: "humor_flavor_steps",
+    capability: "read",
+    pkField: "id",
+    previewFields: ["id", "humor_flavor_id", "order_by", "description", "llm_model_id"],
+  },
+  {
+    key: "humorMix",
+    label: "Humor Mix",
+    table: "humor_flavor_mix",
+    capability: "update",
+    pkField: "id",
+    previewFields: ["id", "humor_flavor_id", "caption_count", "created_datetime_utc"],
+  },
+  {
+    key: "exampleCaptions",
+    label: "Example Captions",
+    table: "caption_examples",
+    capability: "crud",
+    pkField: "id",
+    previewFields: ["id", "image_id", "caption", "priority", "modified_datetime_utc"],
+  },
+  {
+    key: "terms",
+    label: "Terms",
+    table: "terms",
+    capability: "crud",
+    pkField: "id",
+    previewFields: ["id", "term", "term_type_id", "priority", "modified_datetime_utc"],
+  },
+  {
+    key: "captionsRead",
+    label: "Captions",
+    table: "captions",
+    capability: "read",
+    pkField: "id",
+    previewFields: ["id", "profile_id", "image_id", "content", "is_public", "like_count"],
+  },
+  {
+    key: "captionRequests",
+    label: "Caption Requests",
+    table: "caption_requests",
+    capability: "read",
+    pkField: "id",
+    previewFields: ["id", "profile_id", "image_id", "created_datetime_utc"],
+  },
+  {
+    key: "captionExamples",
+    label: "Caption Examples",
+    table: "caption_examples",
+    capability: "crud",
+    pkField: "id",
+    previewFields: ["id", "image_id", "caption", "priority", "modified_datetime_utc"],
+  },
+  {
+    key: "llmModels",
+    label: "LLM Models",
+    table: "llm_models",
+    capability: "crud",
+    pkField: "id",
+    previewFields: ["id", "name", "llm_provider_id", "provider_model_id", "is_temperature_supported"],
+  },
+  {
+    key: "llmProviders",
+    label: "LLM Providers",
+    table: "llm_providers",
+    capability: "crud",
+    pkField: "id",
+    previewFields: ["id", "name", "created_datetime_utc"],
+  },
+  {
+    key: "llmPromptChains",
+    label: "LLM Prompt Chains",
+    table: "llm_prompt_chains",
+    capability: "read",
+    pkField: "id",
+    previewFields: ["id", "caption_request_id", "created_datetime_utc"],
+  },
+  {
+    key: "llmResponses",
+    label: "LLM Responses",
+    table: "llm_model_responses",
+    capability: "read",
+    pkField: "id",
+    previewFields: [
+      "id",
+      "llm_model_id",
+      "caption_request_id",
+      "humor_flavor_id",
+      "processing_time_seconds",
+      "llm_model_response",
+    ],
+  },
+  {
+    key: "allowedDomains",
+    label: "Allowed Signup Domains",
+    table: "allowed_signup_domains",
+    capability: "crud",
+    pkField: "id",
+    previewFields: ["id", "apex_domain", "created_datetime_utc"],
+  },
+  {
+    key: "whitelistedEmails",
+    label: "Whitelisted E-mail Addresses",
+    table: "whitelist_email_addresses",
+    capability: "crud",
+    pkField: "id",
+    previewFields: ["id", "email_address", "modified_datetime_utc", "created_datetime_utc"],
+  },
+];
+
+const DOMAIN_PAGE_SIZE = 20;
+
+const DOMAIN_RESOURCES_BY_TAB: Record<TabKey, string[]> = {
+  overview: ["humorFlavors", "humorFlavorSteps", "humorMix", "llmPromptChains", "llmResponses"],
+  profiles: ["users", "allowedDomains", "whitelistedEmails"],
+  images: ["images"],
+  captions: [
+    "captionsRead",
+    "captionRequests",
+    "exampleCaptions",
+    "captionExamples",
+    "terms",
+    "llmModels",
+    "llmProviders",
+    "llmPromptChains",
+    "llmResponses",
+  ],
+};
 
 const PAGE_SIZE: Record<DataTab, number> = {
   profiles: 20,
@@ -63,6 +239,30 @@ function buildPageWindow(current: number, total: number) {
   return [...pages].filter((n) => n >= 1 && n <= total).sort((a, b) => a - b);
 }
 
+type HubInputType = "text" | "number" | "boolean" | "json";
+
+function displayValue(value: unknown) {
+  if (value === null || value === undefined) return "-";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function domainRecord<T>(initial: T): Record<string, T> {
+  return Object.fromEntries(DOMAIN_RESOURCES.map((resource) => [resource.key, initial])) as Record<string, T>;
+}
+
+function toFormString(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
 export default function HomePage() {
   const [token, setToken] = useState<string | null>(null);
   const [status, setStatus] = useState("Checking session...");
@@ -77,6 +277,24 @@ export default function HomePage() {
   const [profileQuery, setProfileQuery] = useState("");
   const [imageQuery, setImageQuery] = useState("");
   const [captionQuery, setCaptionQuery] = useState("");
+  const [domainResourceKey, setDomainResourceKey] = useState(DOMAIN_RESOURCES[0].key);
+  const [domainRows, setDomainRows] = useState<Record<string, GenericRow[]>>(() => domainRecord<GenericRow[]>([]));
+  const [domainTotals, setDomainTotals] = useState<Record<string, number>>(() => domainRecord(0));
+  const [domainPages, setDomainPages] = useState<Record<string, number>>(() => domainRecord(1));
+  const [domainQuery, setDomainQuery] = useState<Record<string, string>>(() => domainRecord(""));
+  const [domainLoading, setDomainLoading] = useState<Record<string, boolean>>(() => domainRecord(false));
+  const [domainErrors, setDomainErrors] = useState<Record<string, string | null>>(() => domainRecord<string | null>(null));
+  const [domainCreateForm, setDomainCreateForm] = useState<Record<string, string>>({});
+  const [editingPk, setEditingPk] = useState<string | number | boolean | null>(null);
+  const [domainEditForm, setDomainEditForm] = useState<Record<string, string>>({});
+  const [domainMessage, setDomainMessage] = useState<string | null>(null);
+  const [uploadProfileId, setUploadProfileId] = useState("");
+  const [uploadPrefix, setUploadPrefix] = useState("admin");
+  const [uploadPublic, setUploadPublic] = useState(true);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [detailRow, setDetailRow] = useState<GenericRow | null>(null);
+  const effectiveUploadProfileId = uploadProfileId.trim() || me?.id?.trim() || "";
 
   const stats = useMemo(() => {
     if (!data) {
@@ -161,6 +379,77 @@ export default function HomePage() {
     });
   }, [data, captionQuery]);
 
+  const visibleDomainResources = useMemo(() => {
+    const allowedKeys = new Set(DOMAIN_RESOURCES_BY_TAB[activeTab]);
+    return DOMAIN_RESOURCES.filter((resource) => allowedKeys.has(resource.key));
+  }, [activeTab]);
+
+  const selectedDomainResource = useMemo(() => {
+    const found = visibleDomainResources.find((resource) => resource.key === domainResourceKey);
+    return found ?? visibleDomainResources[0] ?? DOMAIN_RESOURCES[0];
+  }, [domainResourceKey, visibleDomainResources]);
+
+  const selectedDomainPage = domainPages[selectedDomainResource.key] ?? 1;
+  const selectedDomainTotal = domainTotals[selectedDomainResource.key] ?? 0;
+  const selectedDomainTotalPages = Math.max(1, Math.ceil(selectedDomainTotal / DOMAIN_PAGE_SIZE));
+
+  const selectedDomainRows = useMemo(() => {
+    const rows = domainRows[selectedDomainResource.key] ?? [];
+    const query = (domainQuery[selectedDomainResource.key] ?? "").trim().toLowerCase();
+    if (!query) return rows;
+    return rows.filter((row) => JSON.stringify(row).toLowerCase().includes(query));
+  }, [domainQuery, domainRows, selectedDomainResource.key]);
+
+  const selectedDomainColumns = useMemo(() => {
+    const keys = new Set<string>();
+    for (const row of selectedDomainRows.slice(0, 25)) {
+      Object.keys(row).forEach((key) => keys.add(key));
+    }
+    return Array.from(keys).slice(0, 12);
+  }, [selectedDomainRows]);
+
+  const previewColumns = useMemo(() => {
+    const preferred = selectedDomainResource.previewFields ?? [];
+    const existing = selectedDomainColumns;
+    const ordered = preferred.filter((field) => existing.includes(field));
+    const fallback = existing.filter((field) => !ordered.includes(field)).slice(0, Math.max(0, 6 - ordered.length));
+    const result = [...ordered, ...fallback];
+    return result.length > 0 ? result : existing.slice(0, 6);
+  }, [selectedDomainColumns, selectedDomainResource.previewFields]);
+
+  const editableDomainFields = useMemo(() => {
+    const systemFields = new Set([
+      selectedDomainResource.pkField,
+      "created_datetime_utc",
+      "modified_datetime_utc",
+      "created_at",
+      "updated_at",
+    ]);
+    return selectedDomainColumns.filter((column) => !systemFields.has(column));
+  }, [selectedDomainColumns, selectedDomainResource.pkField]);
+
+  const domainFieldTypes = useMemo(() => {
+    const fieldTypes: Record<string, HubInputType> = {};
+    for (const field of editableDomainFields) {
+      fieldTypes[field] = "text";
+      for (const row of selectedDomainRows) {
+        const value = row[field];
+        if (value === null || value === undefined) continue;
+        if (typeof value === "boolean") {
+          fieldTypes[field] = "boolean";
+        } else if (typeof value === "number") {
+          fieldTypes[field] = "number";
+        } else if (typeof value === "object") {
+          fieldTypes[field] = "json";
+        } else {
+          fieldTypes[field] = "text";
+        }
+        break;
+      }
+    }
+    return fieldTypes;
+  }, [editableDomainFields, selectedDomainRows]);
+
   const overviewInsights = useMemo(() => {
     if (!data) {
       return {
@@ -238,6 +527,39 @@ export default function HomePage() {
     });
   }, []);
 
+  const loadDomainResource = useCallback(
+    async (authToken: string, resourceKey: string, page = 1) => {
+      const resource = DOMAIN_RESOURCES.find((item) => item.key === resourceKey);
+      if (!resource) return;
+
+      setDomainLoading((prev) => ({ ...prev, [resourceKey]: true }));
+      setDomainErrors((prev) => ({ ...prev, [resourceKey]: null }));
+
+      try {
+        const result = await listTableRows(
+          authToken,
+          resource.table,
+          page,
+          DOMAIN_PAGE_SIZE,
+          "*",
+          resource.order ?? "created_datetime_utc.desc.nullslast",
+        );
+
+        setDomainRows((prev) => ({ ...prev, [resourceKey]: result.rows }));
+        setDomainTotals((prev) => ({ ...prev, [resourceKey]: result.total }));
+        setDomainPages((prev) => ({ ...prev, [resourceKey]: result.page }));
+      } catch (loadError) {
+        setDomainErrors((prev) => ({
+          ...prev,
+          [resourceKey]: loadError instanceof Error ? loadError.message : "Failed to load resource.",
+        }));
+      } finally {
+        setDomainLoading((prev) => ({ ...prev, [resourceKey]: false }));
+      }
+    },
+    [],
+  );
+
   const restoreSession = useCallback(async () => {
     try {
       if (!supabase) {
@@ -275,6 +597,10 @@ export default function HomePage() {
       setPages(INITIAL_PAGES);
       setStatus("Loading admin data...");
       await loadAdminData(authToken, INITIAL_PAGES);
+      await Promise.all([
+        loadDomainResource(authToken, "users", 1),
+        loadDomainResource(authToken, "images", 1),
+      ]);
       setStatus("Admin panel ready.");
     } catch (sessionErr) {
       setIsLoggedIn(false);
@@ -286,7 +612,7 @@ export default function HomePage() {
     } finally {
       setIsLoading(false);
     }
-  }, [loadAdminData]);
+  }, [loadAdminData, loadDomainResource]);
 
   useEffect(() => {
     void restoreSession();
@@ -301,6 +627,42 @@ export default function HomePage() {
     });
     return () => data.subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    const allowedKeys = new Set(DOMAIN_RESOURCES_BY_TAB[activeTab]);
+    if (allowedKeys.has(domainResourceKey)) return;
+    const first = DOMAIN_RESOURCES_BY_TAB[activeTab][0];
+    if (first) setDomainResourceKey(first);
+  }, [activeTab, domainResourceKey]);
+
+  useEffect(() => {
+    setDomainCreateForm((previous) => {
+      const next: Record<string, string> = {};
+      for (const field of editableDomainFields) {
+        next[field] = previous[field] ?? "";
+      }
+      return next;
+    });
+  }, [selectedDomainResource.key, editableDomainFields]);
+
+  useEffect(() => {
+    setDetailRow(null);
+  }, [selectedDomainResource.key, activeTab]);
+
+  useEffect(() => {
+    if (me?.id) {
+      setUploadProfileId((previous) => previous.trim() || me.id);
+      return;
+    }
+    setUploadProfileId("");
+  }, [me?.id]);
+
+  useEffect(() => {
+    if (!token || !isSuperAdmin) return;
+    const currentRows = domainRows[selectedDomainResource.key] ?? [];
+    if (currentRows.length > 0) return;
+    void loadDomainResource(token, selectedDomainResource.key, 1);
+  }, [domainRows, isSuperAdmin, loadDomainResource, selectedDomainResource.key, token]);
 
   const logout = async () => {
     if (supabase) {
@@ -369,6 +731,189 @@ export default function HomePage() {
     });
   };
 
+  const runDomainAction = async (action: () => Promise<void>, successMessage: string) => {
+    if (!token) {
+      setError("No session token found. Sign in again.");
+      return;
+    }
+
+    try {
+      setError(null);
+      setDomainMessage(null);
+      await action();
+      setDomainMessage(successMessage);
+      await loadDomainResource(token, selectedDomainResource.key, selectedDomainPage);
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Domain action failed.");
+    }
+  };
+
+  const canCreateDomain = selectedDomainResource.capability === "crud";
+  const canUpdateDomain =
+    selectedDomainResource.capability === "crud" || selectedDomainResource.capability === "update";
+  const canDeleteDomain = selectedDomainResource.capability === "crud";
+
+  const goDomainPage = (nextPage: number) => {
+    if (!token) return;
+    const bounded = Math.max(1, Math.min(nextPage, selectedDomainTotalPages));
+    void loadDomainResource(token, selectedDomainResource.key, bounded);
+  };
+
+  const parseHubInputValue = (field: string, raw: string, allowNull: boolean) => {
+    const inputType = domainFieldTypes[field] ?? "text";
+    if (raw === "") {
+      return allowNull ? null : undefined;
+    }
+    if (inputType === "boolean") {
+      if (raw === "true") return true;
+      if (raw === "false") return false;
+      throw new Error(`Field "${field}" expects true/false.`);
+    }
+    if (inputType === "number") {
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) {
+        throw new Error(`Field "${field}" expects a number.`);
+      }
+      return parsed;
+    }
+    if (inputType === "json") {
+      try {
+        return JSON.parse(raw);
+      } catch {
+        throw new Error(`Field "${field}" must be valid JSON.`);
+      }
+    }
+    return raw;
+  };
+
+  const buildPayloadFromForm = (values: Record<string, string>, allowNull: boolean) => {
+    const payload: GenericRow = {};
+    for (const field of editableDomainFields) {
+      const raw = values[field] ?? "";
+      const parsed = parseHubInputValue(field, raw, allowNull);
+      if (parsed !== undefined) {
+        payload[field] = parsed;
+      }
+    }
+    return payload;
+  };
+
+  const createDomainRow = async () => {
+    if (!canCreateDomain) return;
+    await runDomainAction(async () => {
+      const payload = buildPayloadFromForm(domainCreateForm, false);
+      await insertTableRow(token!, selectedDomainResource.table, payload);
+      setDomainCreateForm((previous) => {
+        const next: Record<string, string> = {};
+        for (const field of Object.keys(previous)) next[field] = "";
+        return next;
+      });
+    }, `Created new row in ${selectedDomainResource.table}.`);
+  };
+
+  const startEditDomainRow = (row: GenericRow) => {
+    const pkValue = row[selectedDomainResource.pkField];
+    if (typeof pkValue !== "string" && typeof pkValue !== "number" && typeof pkValue !== "boolean") {
+      setError(`Cannot edit row: missing primitive ${selectedDomainResource.pkField}.`);
+      return;
+    }
+    setEditingPk(pkValue);
+    const nextForm: Record<string, string> = {};
+    for (const field of editableDomainFields) {
+      nextForm[field] = toFormString(row[field]);
+    }
+    setDomainEditForm(nextForm);
+  };
+
+  const saveDomainEdit = async () => {
+    if (!canUpdateDomain || editingPk === null) return;
+    await runDomainAction(async () => {
+      const payload = buildPayloadFromForm(domainEditForm, true);
+      await updateTableRowByField(
+        token!,
+        selectedDomainResource.table,
+        selectedDomainResource.pkField,
+        editingPk,
+        payload,
+      );
+      setEditingPk(null);
+      setDomainEditForm({});
+    }, `Updated row in ${selectedDomainResource.table}.`);
+  };
+
+  const deleteDomainRow = async (row: GenericRow) => {
+    if (!canDeleteDomain) return;
+    const pkValue = row[selectedDomainResource.pkField];
+    if (typeof pkValue !== "string" && typeof pkValue !== "number" && typeof pkValue !== "boolean") {
+      setError(`Cannot delete row: missing primitive ${selectedDomainResource.pkField}.`);
+      return;
+    }
+    if (!window.confirm(`Delete ${selectedDomainResource.table}.${selectedDomainResource.pkField}=${pkValue}?`)) {
+      return;
+    }
+    await runDomainAction(async () => {
+      await deleteTableRowByField(
+        token!,
+        selectedDomainResource.table,
+        selectedDomainResource.pkField,
+        pkValue,
+      );
+    }, `Deleted row from ${selectedDomainResource.table}.`);
+  };
+
+  const uploadDomainImage = async () => {
+    if (!token) {
+      setError("No session token found. Sign in again.");
+      return;
+    }
+    if (!supabase) {
+      setError(missingSupabaseMessage);
+      return;
+    }
+    if (!uploadFile) {
+      setError("Choose an image file first.");
+      return;
+    }
+    if (!effectiveUploadProfileId) {
+      setError("No signed-in profile found for image upload.");
+      return;
+    }
+
+    setIsUploading(true);
+    setDomainMessage(null);
+    setError(null);
+
+    try {
+      const bucket = process.env.NEXT_PUBLIC_IMAGE_BUCKET || "images";
+      const safePrefix = uploadPrefix.trim().replace(/^\/+|\/+$/g, "");
+      const safeName = uploadFile.name.replace(/[^a-zA-Z0-9_.-]/g, "_");
+      const objectPath = `${safePrefix ? `${safePrefix}/` : ""}${Date.now()}-${safeName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from(bucket)
+        .upload(objectPath, uploadFile, { upsert: false, contentType: uploadFile.type || undefined });
+      if (uploadError) throw uploadError;
+
+      const { data } = supabase.storage.from(bucket).getPublicUrl(objectPath);
+      await insertTableRow(token, "images", {
+        profile_id: effectiveUploadProfileId,
+        url: data.publicUrl,
+        is_public: uploadPublic,
+      });
+
+      setDomainMessage(`Image uploaded and row created in images (bucket: ${bucket}).`);
+      setUploadFile(null);
+      await loadDomainResource(token, "images", 1);
+      if (selectedDomainResource.key !== "images") {
+        await loadDomainResource(token, selectedDomainResource.key, selectedDomainPage);
+      }
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "Image upload failed.");
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   const renderPager = (tab: DataTab) => {
     const current = pages[tab];
     const total = totalPages[tab];
@@ -408,6 +953,304 @@ export default function HomePage() {
       </div>
     );
   };
+
+  const renderOperationsHub = () => (
+    <details className="domainIntegrated">
+      <summary className="domainIntegratedSummary">Data Operations Hub</summary>
+      <p className="muted">
+        Supplemental tools for related domain tables. Existing tab workflows remain the primary moderation surface.
+      </p>
+
+      <div className="domainLayout">
+        <aside className="domainSidebar">
+          {visibleDomainResources.map((resource) => (
+            <button
+              key={resource.key}
+              type="button"
+              className={resource.key === selectedDomainResource.key ? "domainNavBtn domainNavBtnActive" : "domainNavBtn"}
+              onClick={() => {
+                setDomainResourceKey(resource.key);
+                setEditingPk(null);
+                setDomainMessage(null);
+                if (token && (domainRows[resource.key] ?? []).length === 0) {
+                  void loadDomainResource(token, resource.key, 1);
+                }
+              }}
+            >
+              {resource.label}
+            </button>
+          ))}
+        </aside>
+
+        <div>
+          <p className="muted">
+            Table <code>{selectedDomainResource.table}</code> | Capability <code>{selectedDomainResource.capability}</code>{" "}
+            | PK <code>{selectedDomainResource.pkField}</code>
+          </p>
+
+          <div className="sectionToolbar">
+            <input
+              className="searchInput"
+              type="text"
+              placeholder="Filter rows on this page"
+              value={domainQuery[selectedDomainResource.key] ?? ""}
+              onChange={(e) => setDomainQuery((prev) => ({ ...prev, [selectedDomainResource.key]: e.target.value }))}
+            />
+            <span className="muted">
+              {selectedDomainRows.length} rows on page {selectedDomainPage}/{selectedDomainTotalPages} (total{" "}
+              {selectedDomainTotal})
+            </span>
+          </div>
+
+          <div className="pager">
+            <div className="pagerButtons">
+              <button type="button" className="pageBtn" onClick={() => goDomainPage(selectedDomainPage - 1)} disabled={selectedDomainPage <= 1}>
+                Prev
+              </button>
+              <button
+                type="button"
+                className="pageBtn"
+                onClick={() => goDomainPage(selectedDomainPage + 1)}
+                disabled={selectedDomainPage >= selectedDomainTotalPages}
+              >
+                Next
+              </button>
+              <button
+                type="button"
+                className="pageBtn"
+                onClick={() => token && void loadDomainResource(token, selectedDomainResource.key, selectedDomainPage)}
+              >
+                Reload
+              </button>
+            </div>
+          </div>
+
+          {domainErrors[selectedDomainResource.key] && <p className="error">{domainErrors[selectedDomainResource.key]}</p>}
+          {domainLoading[selectedDomainResource.key] && <p className="muted">Loading table...</p>}
+          {domainMessage && <p className="status">{domainMessage}</p>}
+
+          <div className="tableWrap opsTableWrap">
+            <table>
+              <thead>
+                <tr>
+                  {previewColumns.map((column) => (
+                    <th key={column}>{column}</th>
+                  ))}
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedDomainRows.map((row, index) => (
+                  <tr key={`${selectedDomainResource.key}-${index}`}>
+                    {previewColumns.map((column) => (
+                      <td key={column} className="tableTruncateCell">
+                        <span className="tablePreviewValue" title={displayValue(row[column])}>
+                          {displayValue(row[column])}
+                        </span>
+                      </td>
+                    ))}
+                    <td>
+                      <div className="domainActionButtons">
+                        <button type="button" onClick={() => setDetailRow(row)}>
+                          View
+                        </button>
+                        {canUpdateDomain && (
+                          <button type="button" onClick={() => startEditDomainRow(row)}>
+                            Edit
+                          </button>
+                        )}
+                        {canDeleteDomain && (
+                          <button type="button" onClick={() => void deleteDomainRow(row)}>
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {selectedDomainRows.length === 0 && !domainLoading[selectedDomainResource.key] && (
+            <p className="muted emptyState">No rows found.</p>
+          )}
+
+          {detailRow && (
+            <section className="domainDetailCard">
+              <div className="domainDetailTop">
+                <h3>Row Details</h3>
+                <button type="button" onClick={() => setDetailRow(null)}>
+                  Close
+                </button>
+              </div>
+              <div className="domainDetailGrid">
+                {Object.entries(detailRow).map(([key, value]) => (
+                  <div key={key} className="domainDetailItem">
+                    <p className="domainDetailKey">{key}</p>
+                    <pre className="domainDetailValue">{displayValue(value)}</pre>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {canCreateDomain && (
+            <section className="domainEditorCard">
+              <h3>Create Row</h3>
+              <p className="muted">Fill in fields to insert a new record.</p>
+              {editableDomainFields.length === 0 ? (
+                <p className="muted">No editable columns inferred yet. Load table rows first.</p>
+              ) : (
+                <div className="domainFormGrid">
+                  {editableDomainFields.map((field) => (
+                  <label key={`create-${field}`} className="domainField">
+                    <span>{field}</span>
+                    {domainFieldTypes[field] === "boolean" ? (
+                      <select
+                        value={domainCreateForm[field] ?? ""}
+                        onChange={(e) =>
+                          setDomainCreateForm((prev) => ({ ...prev, [field]: e.target.value }))
+                        }
+                      >
+                        <option value="">(blank)</option>
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    ) : domainFieldTypes[field] === "json" ? (
+                      <textarea
+                        className="domainFieldJson"
+                        value={domainCreateForm[field] ?? ""}
+                        onChange={(e) =>
+                          setDomainCreateForm((prev) => ({ ...prev, [field]: e.target.value }))
+                        }
+                        placeholder='{"key":"value"}'
+                      />
+                    ) : (
+                      <input
+                        type={domainFieldTypes[field] === "number" ? "number" : "text"}
+                        value={domainCreateForm[field] ?? ""}
+                        onChange={(e) =>
+                          setDomainCreateForm((prev) => ({ ...prev, [field]: e.target.value }))
+                        }
+                        placeholder="optional"
+                      />
+                    )}
+                  </label>
+                  ))}
+                </div>
+              )}
+              <button type="button" onClick={() => void createDomainRow()}>
+                Create
+              </button>
+            </section>
+          )}
+
+          {canUpdateDomain && editingPk !== null && (
+            <section className="domainEditorCard">
+              <h3>Edit Row</h3>
+              <p className="muted">
+                Updating where <code>{selectedDomainResource.pkField}={String(editingPk)}</code>. PK field is removed
+                from payload.
+              </p>
+              {editableDomainFields.length === 0 ? (
+                <p className="muted">No editable columns inferred yet.</p>
+              ) : (
+                <div className="domainFormGrid">
+                  {editableDomainFields.map((field) => (
+                  <label key={`edit-${field}`} className="domainField">
+                    <span>{field}</span>
+                    {domainFieldTypes[field] === "boolean" ? (
+                      <select
+                        value={domainEditForm[field] ?? ""}
+                        onChange={(e) =>
+                          setDomainEditForm((prev) => ({ ...prev, [field]: e.target.value }))
+                        }
+                      >
+                        <option value="">null</option>
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    ) : domainFieldTypes[field] === "json" ? (
+                      <textarea
+                        className="domainFieldJson"
+                        value={domainEditForm[field] ?? ""}
+                        onChange={(e) =>
+                          setDomainEditForm((prev) => ({ ...prev, [field]: e.target.value }))
+                        }
+                      />
+                    ) : (
+                      <input
+                        type={domainFieldTypes[field] === "number" ? "number" : "text"}
+                        value={domainEditForm[field] ?? ""}
+                        onChange={(e) =>
+                          setDomainEditForm((prev) => ({ ...prev, [field]: e.target.value }))
+                        }
+                      />
+                    )}
+                  </label>
+                  ))}
+                </div>
+              )}
+              <div className="domainActionButtons">
+                <button type="button" onClick={() => void saveDomainEdit()}>
+                  Save
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingPk(null);
+                    setDomainEditForm({});
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </section>
+          )}
+
+          {selectedDomainResource.supportsUpload && (
+            <section className="domainEditorCard">
+              <h3>Upload New Image</h3>
+              <p className="muted">
+                Upload to storage bucket <code>{process.env.NEXT_PUBLIC_IMAGE_BUCKET || "images"}</code> and create an
+                `images` row.
+              </p>
+              <div className="domainUploadGrid">
+                <label>
+                  profile_id
+                  <input
+                    className="searchInput"
+                    type="text"
+                    value={uploadProfileId}
+                    onChange={(e) => setUploadProfileId(e.target.value)}
+                    placeholder={me?.id ?? "Defaults to signed-in user"}
+                  />
+                </label>
+                <label>
+                  storage prefix
+                  <input
+                    className="searchInput"
+                    type="text"
+                    value={uploadPrefix}
+                    onChange={(e) => setUploadPrefix(e.target.value)}
+                    placeholder="admin"
+                  />
+                </label>
+                <label className="toggleLabel">
+                  <input type="checkbox" checked={uploadPublic} onChange={(e) => setUploadPublic(e.target.checked)} />
+                  is_public
+                </label>
+                <input type="file" accept="image/*" onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)} />
+              </div>
+              <button type="button" onClick={() => void uploadDomainImage()} disabled={isUploading}>
+                {isUploading ? "Uploading..." : "Upload Image"}
+              </button>
+            </section>
+          )}
+        </div>
+      </div>
+    </details>
+  );
 
   if (!isLoggedIn) {
     return (
@@ -603,6 +1446,8 @@ export default function HomePage() {
               ))}
             </article>
           </section>
+
+          {renderOperationsHub()}
         </section>
       )}
 
@@ -651,6 +1496,7 @@ export default function HomePage() {
           </div>
           {filteredProfiles.length === 0 && <p className="muted emptyState">No matching profiles.</p>}
           {renderPager("profiles")}
+          {renderOperationsHub()}
         </section>
       )}
 
@@ -697,6 +1543,7 @@ export default function HomePage() {
           </div>
           {filteredImages.length === 0 && <p className="muted emptyState">No matching images.</p>}
           {renderPager("images")}
+          {renderOperationsHub()}
         </section>
       )}
 
@@ -751,8 +1598,10 @@ export default function HomePage() {
           </div>
           {filteredCaptions.length === 0 && <p className="muted emptyState">No matching captions.</p>}
           {renderPager("captions")}
+          {renderOperationsHub()}
         </section>
       )}
+
     </main>
   );
 }

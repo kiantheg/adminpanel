@@ -54,7 +54,8 @@ body {
 
 .page {
   position: relative;
-  overflow: hidden;
+  overflow-x: visible;
+  overflow-y: visible;
   min-height: 100vh;
   padding: 2rem;
   max-width: 1200px;
@@ -613,6 +614,172 @@ td a {
   white-space: nowrap;
 }
 
+.domainIntegrated {
+  margin-top: 1rem;
+  border: 1px solid rgba(132, 247, 255, 0.16);
+  border-radius: 12px;
+  padding: 0.75rem;
+  background: rgba(6, 14, 28, 0.35);
+}
+
+.domainIntegratedSummary {
+  cursor: pointer;
+  font-weight: 700;
+  color: #dce4f8;
+  padding: 0.2rem 0;
+}
+
+.domainIntegratedSummary::marker {
+  color: #9fd8ff;
+}
+
+.domainLayout {
+  margin-top: 0.85rem;
+  display: grid;
+  grid-template-columns: minmax(180px, 250px) minmax(0, 1fr);
+  gap: 0.8rem;
+}
+
+.domainLayout > div {
+  min-width: 0;
+}
+
+.domainSidebar {
+  display: grid;
+  gap: 0.45rem;
+  align-content: start;
+}
+
+.domainNavBtn {
+  text-align: left;
+  background: rgba(110, 198, 255, 0.1);
+  color: var(--text);
+  border: 1px solid rgba(110, 198, 255, 0.28);
+}
+
+.domainNavBtnActive {
+  border-color: rgba(132, 247, 255, 0.82);
+  background: rgba(132, 247, 255, 0.25);
+}
+
+.tableTruncateCell {
+  white-space: nowrap;
+}
+
+.tablePreviewValue {
+  display: inline-block;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.opsTableWrap {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+.domainActionButtons {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.domainEditorCard {
+  margin-top: 0.85rem;
+  padding: 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(7, 16, 34, 0.45);
+}
+
+.domainFormGrid {
+  margin: 0.55rem 0;
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.domainField {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.86rem;
+}
+
+.domainField span {
+  color: var(--muted);
+}
+
+.domainField input,
+.domainField select,
+.domainField textarea {
+  border-radius: 8px;
+  border: 1px solid rgba(132, 247, 255, 0.32);
+  background: rgba(4, 10, 22, 0.6);
+  color: var(--text);
+  padding: 0.52rem 0.58rem;
+}
+
+.domainFieldJson {
+  min-height: 88px;
+  font: 0.8rem/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.domainDetailCard {
+  margin-top: 0.85rem;
+  border: 1px solid rgba(132, 247, 255, 0.24);
+  border-radius: 10px;
+  padding: 0.75rem;
+  background: rgba(4, 11, 24, 0.58);
+}
+
+.domainDetailTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.domainDetailGrid {
+  margin-top: 0.6rem;
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.domainDetailItem {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 0.5rem;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.domainDetailKey {
+  margin: 0 0 0.3rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.domainDetailValue {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 0.8rem/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.domainUploadGrid {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0.55rem 0;
+}
+
+.domainUploadGrid label {
+  display: grid;
+  gap: 0.36rem;
+  font-size: 0.9rem;
+}
+
 @media (max-width: 900px) {
   .page {
     padding: 1rem;
@@ -631,5 +798,9 @@ td a {
   .sectionToolbar {
     align-items: start;
     flex-direction: column;
+  }
+
+  .domainLayout {
+    grid-template-columns: 1fr;
   }
 }

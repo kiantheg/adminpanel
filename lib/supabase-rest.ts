@@ -18,6 +18,7 @@ function getSupabaseConfig() {
 }
 
 type JsonRecord = Record<string, unknown>;
+export type GenericRow = Record<string, unknown>;
 
 type RequestOptions = {
   method?: "GET" | "POST" | "PATCH" | "DELETE";
@@ -154,7 +155,7 @@ async function pagedSelect<T>(
   token: string,
   table: string,
   select: string,
-  order: string,
+  order: string | null,
   page: number,
   pageSize: number,
 ) {
@@ -163,7 +164,8 @@ async function pagedSelect<T>(
   const safePageSize = Math.min(Math.max(1, pageSize), 200);
   const from = (safePage - 1) * safePageSize;
   const to = from + safePageSize - 1;
-  const query = `select=${select}&order=${encodeURIComponent(order)}&limit=${safePageSize}&offset=${from}`;
+  const orderQuery = order ? `&order=${encodeURIComponent(order)}` : "";
+  const query = `select=${select}${orderQuery}&limit=${safePageSize}&offset=${from}`;
 
   const response = await fetch(`${url}/rest/v1/${table}?${query}`, {
     method: "GET",
@@ -318,5 +320,60 @@ export async function deleteCaption(token: string, id: string) {
     method: "DELETE",
     token,
     query: `id=eq.${encodeURIComponent(id)}`,
+  });
+}
+
+export async function listTableRows(
+  token: string,
+  table: string,
+  page = 1,
+  pageSize = 20,
+  select = "*",
+  order: string | null = null,
+): Promise<PagedResult<GenericRow>> {
+  const result = await pagedSelect<GenericRow>(token, table, select, order, page, pageSize);
+  return {
+    rows: result.rows,
+    total: result.total,
+    page: result.page,
+    pageSize: result.pageSize,
+  };
+}
+
+export async function insertTableRow(token: string, table: string, payload: GenericRow) {
+  return await supabaseRequest<GenericRow[]>(`/rest/v1/${table}`, {
+    method: "POST",
+    token,
+    prefer: "return=representation",
+    body: payload,
+  });
+}
+
+export async function updateTableRowByField(
+  token: string,
+  table: string,
+  field: string,
+  value: string | number | boolean,
+  payload: GenericRow,
+) {
+  return await supabaseRequest<GenericRow[]>(`/rest/v1/${table}`, {
+    method: "PATCH",
+    token,
+    prefer: "return=representation",
+    query: `${encodeURIComponent(field)}=eq.${encodeURIComponent(String(value))}`,
+    body: payload,
+  });
+}
+
+export async function deleteTableRowByField(
+  token: string,
+  table: string,
+  field: string,
+  value: string | number | boolean,
+) {
+  await supabaseRequest<null>(`/rest/v1/${table}`, {
+    method: "DELETE",
+    token,
+    query: `${encodeURIComponent(field)}=eq.${encodeURIComponent(String(value))}`,
   });
 }
