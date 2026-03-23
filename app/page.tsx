@@ -420,6 +420,8 @@ export default function HomePage() {
   const editableDomainFields = useMemo(() => {
     const systemFields = new Set([
       selectedDomainResource.pkField,
+      "created_by_user_id",
+      "modified_by_user_id",
       "created_datetime_utc",
       "modified_datetime_utc",
       "created_at",
@@ -698,21 +700,24 @@ export default function HomePage() {
 
   const toggleProfileFlag = async (profileId: string, value: boolean) => {
     await guardedAction(async () => {
-      await updateProfileFlags(token!, profileId, { is_superadmin: value });
+      if (!me?.id) throw new Error("No signed-in profile found.");
+      await updateProfileFlags(token!, me.id, profileId, { is_superadmin: value });
       await loadAdminData(token!, pages);
     });
   };
 
   const toggleImagePublic = async (imageId: string, value: boolean) => {
     await guardedAction(async () => {
-      await updateImagePublic(token!, imageId, value);
+      if (!me?.id) throw new Error("No signed-in profile found.");
+      await updateImagePublic(token!, me.id, imageId, value);
       await loadAdminData(token!, pages);
     });
   };
 
   const toggleCaptionPublic = async (captionId: string, value: boolean) => {
     await guardedAction(async () => {
-      await updateCaptionPublic(token!, captionId, value);
+      if (!me?.id) throw new Error("No signed-in profile found.");
+      await updateCaptionPublic(token!, me.id, captionId, value);
       await loadAdminData(token!, pages);
     });
   };
@@ -801,8 +806,9 @@ export default function HomePage() {
   const createDomainRow = async () => {
     if (!canCreateDomain) return;
     await runDomainAction(async () => {
+      if (!me?.id) throw new Error("No signed-in profile found.");
       const payload = buildPayloadFromForm(domainCreateForm, false);
-      await insertTableRow(token!, selectedDomainResource.table, payload);
+      await insertTableRow(token!, me.id, selectedDomainResource.table, payload);
       setDomainCreateForm((previous) => {
         const next: Record<string, string> = {};
         for (const field of Object.keys(previous)) next[field] = "";
@@ -828,9 +834,11 @@ export default function HomePage() {
   const saveDomainEdit = async () => {
     if (!canUpdateDomain || editingPk === null) return;
     await runDomainAction(async () => {
+      if (!me?.id) throw new Error("No signed-in profile found.");
       const payload = buildPayloadFromForm(domainEditForm, true);
       await updateTableRowByField(
         token!,
+        me.id,
         selectedDomainResource.table,
         selectedDomainResource.pkField,
         editingPk,
@@ -895,7 +903,8 @@ export default function HomePage() {
       if (uploadError) throw uploadError;
 
       const { data } = supabase.storage.from(bucket).getPublicUrl(objectPath);
-      await insertTableRow(token, "images", {
+      if (!me?.id) throw new Error("No signed-in profile found.");
+      await insertTableRow(token, me.id, "images", {
         profile_id: effectiveUploadProfileId,
         url: data.publicUrl,
         is_public: uploadPublic,

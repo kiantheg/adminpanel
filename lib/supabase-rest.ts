@@ -20,6 +20,19 @@ function getSupabaseConfig() {
 type JsonRecord = Record<string, unknown>;
 export type GenericRow = Record<string, unknown>;
 
+const AUDIT_FIELD_KEYS = new Set([
+  "created_by_user_id",
+  "modified_by_user_id",
+  "created_datetime_utc",
+  "modified_datetime_utc",
+]);
+
+function withoutAuditFields(payload: GenericRow): GenericRow {
+  return Object.fromEntries(
+    Object.entries(payload).filter(([key]) => !AUDIT_FIELD_KEYS.has(key)),
+  );
+}
+
 type RequestOptions = {
   method?: "GET" | "POST" | "PATCH" | "DELETE";
   token?: string;
@@ -271,6 +284,7 @@ export async function countCaptionVotes(token: string) {
 
 export async function updateProfileFlags(
   token: string,
+  actingUserId: string,
   id: string,
   updates: Partial<Pick<Profile, "is_superadmin">>,
 ) {
@@ -279,11 +293,14 @@ export async function updateProfileFlags(
     token,
     prefer: "return=representation",
     query: `id=eq.${encodeURIComponent(id)}`,
-    body: updates,
+    body: {
+      ...withoutAuditFields(updates),
+      modified_by_user_id: actingUserId,
+    },
   });
 }
 
-export async function updateImagePublic(token: string, id: string, isPublic: boolean) {
+export async function updateImagePublic(token: string, actingUserId: string, id: string, isPublic: boolean) {
   return await supabaseRequest<ImageRow[]>("/rest/v1/images", {
     method: "PATCH",
     token,
@@ -291,11 +308,12 @@ export async function updateImagePublic(token: string, id: string, isPublic: boo
     query: `id=eq.${encodeURIComponent(id)}`,
     body: {
       is_public: isPublic,
+      modified_by_user_id: actingUserId,
     },
   });
 }
 
-export async function updateCaptionPublic(token: string, id: string, isPublic: boolean) {
+export async function updateCaptionPublic(token: string, actingUserId: string, id: string, isPublic: boolean) {
   return await supabaseRequest<CaptionRow[]>("/rest/v1/captions", {
     method: "PATCH",
     token,
@@ -303,6 +321,7 @@ export async function updateCaptionPublic(token: string, id: string, isPublic: b
     query: `id=eq.${encodeURIComponent(id)}`,
     body: {
       is_public: isPublic,
+      modified_by_user_id: actingUserId,
     },
   });
 }
@@ -340,17 +359,27 @@ export async function listTableRows(
   };
 }
 
-export async function insertTableRow(token: string, table: string, payload: GenericRow) {
+export async function insertTableRow(
+  token: string,
+  actingUserId: string,
+  table: string,
+  payload: GenericRow,
+) {
   return await supabaseRequest<GenericRow[]>(`/rest/v1/${table}`, {
     method: "POST",
     token,
     prefer: "return=representation",
-    body: payload,
+    body: {
+      ...withoutAuditFields(payload),
+      created_by_user_id: actingUserId,
+      modified_by_user_id: actingUserId,
+    },
   });
 }
 
 export async function updateTableRowByField(
   token: string,
+  actingUserId: string,
   table: string,
   field: string,
   value: string | number | boolean,
@@ -361,7 +390,10 @@ export async function updateTableRowByField(
     token,
     prefer: "return=representation",
     query: `${encodeURIComponent(field)}=eq.${encodeURIComponent(String(value))}`,
-    body: payload,
+    body: {
+      ...withoutAuditFields(payload),
+      modified_by_user_id: actingUserId,
+    },
   });
 }
 
