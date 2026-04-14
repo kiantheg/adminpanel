@@ -20,19 +20,6 @@ function getSupabaseConfig() {
 type JsonRecord = Record<string, unknown>;
 export type GenericRow = Record<string, unknown>;
 
-const AUDIT_FIELD_KEYS = new Set([
-  "created_by_user_id",
-  "modified_by_user_id",
-  "created_datetime_utc",
-  "modified_datetime_utc",
-]);
-
-function withoutAuditFields(payload: GenericRow): GenericRow {
-  return Object.fromEntries(
-    Object.entries(payload).filter(([key]) => !AUDIT_FIELD_KEYS.has(key)),
-  );
-}
-
 type RequestOptions = {
   method?: "GET" | "POST" | "PATCH" | "DELETE";
   token?: string;
@@ -284,7 +271,6 @@ export async function countCaptionVotes(token: string) {
 
 export async function updateProfileFlags(
   token: string,
-  actingUserId: string,
   id: string,
   updates: Partial<Pick<Profile, "is_superadmin">>,
 ) {
@@ -293,36 +279,27 @@ export async function updateProfileFlags(
     token,
     prefer: "return=representation",
     query: `id=eq.${encodeURIComponent(id)}`,
-    body: {
-      ...withoutAuditFields(updates),
-      modified_by_user_id: actingUserId,
-    },
+    body: updates,
   });
 }
 
-export async function updateImagePublic(token: string, actingUserId: string, id: string, isPublic: boolean) {
+export async function updateImagePublic(token: string, id: string, isPublic: boolean) {
   return await supabaseRequest<ImageRow[]>("/rest/v1/images", {
     method: "PATCH",
     token,
     prefer: "return=representation",
     query: `id=eq.${encodeURIComponent(id)}`,
-    body: {
-      is_public: isPublic,
-      modified_by_user_id: actingUserId,
-    },
+    body: { is_public: isPublic },
   });
 }
 
-export async function updateCaptionPublic(token: string, actingUserId: string, id: string, isPublic: boolean) {
+export async function updateCaptionPublic(token: string, id: string, isPublic: boolean) {
   return await supabaseRequest<CaptionRow[]>("/rest/v1/captions", {
     method: "PATCH",
     token,
     prefer: "return=representation",
     query: `id=eq.${encodeURIComponent(id)}`,
-    body: {
-      is_public: isPublic,
-      modified_by_user_id: actingUserId,
-    },
+    body: { is_public: isPublic },
   });
 }
 
@@ -361,7 +338,6 @@ export async function listTableRows(
 
 export async function insertTableRow(
   token: string,
-  actingUserId: string,
   table: string,
   payload: GenericRow,
 ) {
@@ -369,17 +345,12 @@ export async function insertTableRow(
     method: "POST",
     token,
     prefer: "return=representation",
-    body: {
-      ...withoutAuditFields(payload),
-      created_by_user_id: actingUserId,
-      modified_by_user_id: actingUserId,
-    },
+    body: payload,
   });
 }
 
 export async function updateTableRowByField(
   token: string,
-  actingUserId: string,
   table: string,
   field: string,
   value: string | number | boolean,
@@ -390,10 +361,7 @@ export async function updateTableRowByField(
     token,
     prefer: "return=representation",
     query: `${encodeURIComponent(field)}=eq.${encodeURIComponent(String(value))}`,
-    body: {
-      ...withoutAuditFields(payload),
-      modified_by_user_id: actingUserId,
-    },
+    body: payload,
   });
 }
 
@@ -408,4 +376,67 @@ export async function deleteTableRowByField(
     token,
     query: `${encodeURIComponent(field)}=eq.${encodeURIComponent(String(value))}`,
   });
+}
+
+function encodeInFilter(values: Array<string | number | boolean>) {
+  return values
+    .map((value) => {
+      if (typeof value === "number" || typeof value === "boolean") {
+        return String(value);
+      }
+      return `"${String(value).replace(/"/g, '\\"')}"`;
+    })
+    .join(",");
+}
+
+export async function listTableRowsByFieldIn(
+  token: string,
+  table: string,
+  field: string,
+  values: Array<string | number | boolean>,
+  select = "*",
+  order: string | null = null,
+) {
+  if (values.length === 0) {
+    return [] as GenericRow[];
+  }
+
+  return await supabaseRequest<GenericRow[]>(`/rest/v1/${table}`, {
+    token,
+    query: `select=${select}&${encodeURIComponent(field)}=in.(${encodeURIComponent(
+      encodeInFilter(values),
+    )})${order ? `&order=${encodeURIComponent(order)}` : ""}`,
+  });
+}
+
+export async function listImagesByIds(token: string, ids: string[]) {
+  return (await listTableRowsByFieldIn(
+    token,
+    "images",
+    "id",
+    ids,
+    "id,profile_id,url,is_public,created_datetime_utc,modified_datetime_utc",
+  )) as ImageRow[];
+}
+
+export async function listCaptionsByImageIds(token: string, imageIds: string[]) {
+  return (await listTableRowsByFieldIn(
+    token,
+    "captions",
+    "image_id",
+    imageIds,
+    "id,profile_id,image_id,content,is_public,like_count,created_datetime_utc",
+    "created_datetime_utc.desc.nullslast",
+  )) as CaptionRow[];
+}
+
+export async function listCaptionExamplesByImageIds(token: string, imageIds: string[]) {
+  return await listTableRowsByFieldIn(
+    token,
+    "caption_examples",
+    "image_id",
+    imageIds,
+    "id,image_id,caption,priority,modified_datetime_utc",
+    "priority.asc.nullslast",
+  );
 }
