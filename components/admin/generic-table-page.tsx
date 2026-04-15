@@ -1,8 +1,9 @@
 "use client";
 
-/* eslint-disable @next/next/no-img-element */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { AdminImage } from "@/components/admin/admin-image";
 import { useAdmin } from "@/components/admin/admin-provider";
+import { useAdminTableController } from "@/components/admin/use-admin-table-controller";
 import { BooleanChoice, EmptyState, Modal, PageHeader, Pagination, StatusBanner } from "@/components/admin/ui";
 import type { AdminResource } from "@/lib/admin-resources";
 import {
@@ -11,11 +12,13 @@ import {
   formatDate,
   inferFormFields,
   initFormState,
+  matchesSearchQuery,
   validateRequiredFields,
 } from "@/lib/admin-ui";
 import {
   deleteTableRowByField,
   insertTableRow,
+  listAllTableRows,
   listImagesByIds,
   listTableRows,
   updateTableRowByField,
@@ -54,68 +57,97 @@ function getBooleanLabels(fieldName: string) {
 
 export function GenericTablePage({ resource }: { resource: AdminResource }) {
   const { token } = useAdmin();
-  const [rows, setRows] = useState<GenericRow[]>([]);
-  const [imagesById, setImagesById] = useState<Record<string, ImageRow>>({});
-  const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [query, setQuery] = useState("");
   const [drawer, setDrawer] = useState<DrawerState>(null);
   const [form, setForm] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const fetchPage = useCallback(async (nextPage: number) => {
+    if (!token) {
+      return { rows: [], total: 0, page: 1, extra: {} as Record<string, ImageRow> };
+    }
 
+    const result = await listTableRows(
+      token,
+      resource.table,
+      nextPage,
+      PAGE_SIZE,
+      "*",
+      resource.defaultOrder ?? "created_datetime_utc.desc.nullslast",
+    );
+
+    const imageIds = [
+      ...new Set(
+        result.rows
+          .map((row) => row.image_id)
+          .filter((value): value is string => typeof value === "string" && value.length > 0),
+      ),
+    ];
+    const linkedImages = await listImagesByIds(token, imageIds);
+
+    return {
+      rows: result.rows,
+      total: result.total,
+      page: result.page,
+      extra: Object.fromEntries(linkedImages.map((image) => [image.id, image])),
+    };
+  }, [resource.defaultOrder, resource.table, token]);
+
+  const fetchAll = useCallback(async () => {
+    if (!token) {
+      return { rows: [], extra: {} as Record<string, ImageRow> };
+    }
+
+    const allRows = await listAllTableRows(
+      token,
+      resource.table,
+      "*",
+      resource.defaultOrder ?? "created_datetime_utc.desc.nullslast",
+    );
+
+    const imageIds = [
+      ...new Set(
+        allRows
+          .map((row) => row.image_id)
+          .filter((value): value is string => typeof value === "string" && value.length > 0),
+      ),
+    ];
+    const linkedImages = await listImagesByIds(token, imageIds);
+
+    return {
+      rows: allRows,
+      extra: Object.fromEntries(linkedImages.map((image) => [image.id, image])),
+    };
+  }, [resource.defaultOrder, resource.table, token]);
+
+  const {
+    currentPage,
+    error,
+    extra,
+    loading,
+    query,
+    rows,
+    searchActive,
+    setError,
+    setPage,
+    setQuery,
+    total,
+    totalPages,
+    refresh,
+  } = useAdminTableController<GenericRow, Record<string, ImageRow>>({
+    token,
+    pageSize: PAGE_SIZE,
+    loadErrorMessage: `Failed to load ${resource.label}.`,
+    fetchPage,
+    fetchAll,
+    filterRows: useCallback((inputRows, currentQuery) => inputRows.filter((row) => matchesSearchQuery(row, currentQuery)), []),
+    resetKey: resource.key,
+  });
+  const imagesById = extra ?? {};
   const formFields = useMemo(
     () => resource.formFields ?? inferFormFields(rows, resource.previewFields, resource.pkField),
     [resource, rows],
   );
-
-  const load = useCallback(async (nextPage = page) => {
-    if (!token) return;
-
-    try {
-      setLoading(true);
-      setError(null);
-      const result = await listTableRows(
-        token,
-        resource.table,
-        nextPage,
-        PAGE_SIZE,
-        "*",
-        resource.defaultOrder ?? "created_datetime_utc.desc.nullslast",
-      );
-      setRows(result.rows);
-      setTotal(result.total);
-      setPage(result.page);
-
-      const imageIds = [
-        ...new Set(
-          result.rows
-            .map((row) => row.image_id)
-            .filter((value): value is string => typeof value === "string" && value.length > 0),
-        ),
-      ];
-      const linkedImages = await listImagesByIds(token, imageIds);
-      setImagesById(Object.fromEntries(linkedImages.map((image) => [image.id, image])));
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : `Failed to load ${resource.label}.`);
-    } finally {
-      setLoading(false);
-    }
-  }, [page, resource.defaultOrder, resource.label, resource.table, token]);
-
-  useEffect(() => {
-    void load(1);
-  }, [load]);
-
-  const filteredRows = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return rows;
-    return rows.filter((row) => JSON.stringify(row).toLowerCase().includes(normalized));
-  }, [query, rows]);
 
   const viewedImageUrl = drawer?.mode === "view" ? resolveImageUrl(drawer.row, imagesById) : null;
   const editedImageUrl =
@@ -151,7 +183,7 @@ export function GenericTablePage({ resource }: { resource: AdminResource }) {
         await insertTableRow(token, resource.table, payload);
         setSuccess(`Created a row in ${resource.table}.`);
         setDrawer(null);
-        await load(1);
+        refresh(1);
         return;
       }
 
@@ -163,7 +195,7 @@ export function GenericTablePage({ resource }: { resource: AdminResource }) {
         await updateTableRowByField(token, resource.table, resource.pkField, pkValue, payload);
         setSuccess(`Updated ${resource.table}.${resource.pkField}=${String(pkValue)}.`);
         setDrawer(null);
-        await load(page);
+        refresh(currentPage);
       }
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "Failed to save row.");
@@ -187,7 +219,7 @@ export function GenericTablePage({ resource }: { resource: AdminResource }) {
       setSuccess(null);
       await deleteTableRowByField(token, resource.table, resource.pkField, pkValue);
       setSuccess(`Deleted ${resource.table}.${resource.pkField}=${String(pkValue)}.`);
-      await load(rows.length === 1 && page > 1 ? page - 1 : page);
+      refresh(rows.length === 1 && currentPage > 1 ? currentPage - 1 : currentPage);
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "Failed to delete row.");
     } finally {
@@ -207,7 +239,7 @@ export function GenericTablePage({ resource }: { resource: AdminResource }) {
         description={resource.description}
         actions={
           <div className="headerActions">
-            <button type="button" className="secondaryButton" onClick={() => void load(page)}>
+            <button type="button" className="secondaryButton" onClick={() => refresh(currentPage)}>
               Refresh
             </button>
             {canCreate && (
@@ -222,29 +254,34 @@ export function GenericTablePage({ resource }: { resource: AdminResource }) {
       <StatusBanner kind="error" message={error} onDismiss={() => setError(null)} />
       <StatusBanner kind="success" message={success} onDismiss={() => setSuccess(null)} />
 
-      <section className="panelCard">
+      <section className="panelCard tablePanel">
         <div className="toolbar">
           <input
             className="searchInput"
             type="search"
-            placeholder={`Search ${resource.label.toLowerCase()} on this page`}
+            placeholder={`Search ${resource.label.toLowerCase()} for any matching value`}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
           <p className="supporting">
-            Table <code>{resource.table}</code> · {filteredRows.length} rows on this page
+            Table <code>{resource.table}</code> ·{" "}
+            {searchActive
+              ? `${total} matching row${total === 1 ? "" : "s"}`
+              : `${total} total row${total === 1 ? "" : "s"}`}
           </p>
         </div>
 
         {loading ? (
           <div className="tableLoading">Loading rows…</div>
-        ) : filteredRows.length === 0 ? (
+        ) : rows.length === 0 ? (
           <EmptyState
-            title={`No ${resource.label.toLowerCase()} rows found`}
+            title={searchActive ? `No matching ${resource.label.toLowerCase()} rows` : `No ${resource.label.toLowerCase()} rows found`}
             description={
-              canCreate
+              searchActive
+                ? "Try a broader search or clear the current query."
+                : canCreate
                 ? "Use the create action to add a new row."
-                : "No rows matched the current page and search."
+                : "No rows are currently available for this table."
             }
             action={
               canCreate ? (
@@ -266,7 +303,7 @@ export function GenericTablePage({ resource }: { resource: AdminResource }) {
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.map((row, index) => (
+                {rows.map((row, index) => (
                   <tr key={`${String(row[resource.pkField] ?? index)}-${index}`}>
                     {resource.previewFields.map((field) => (
                       <td key={field}>
@@ -274,7 +311,12 @@ export function GenericTablePage({ resource }: { resource: AdminResource }) {
                           formatDate(typeof row[field] === "string" ? row[field] : null)
                         ) : field === "image_id" && typeof row.image_id === "string" && imagesById[row.image_id]?.url ? (
                           <div className="linkedImageCell">
-                            <img src={imagesById[row.image_id].url} alt="" className="tableThumb" />
+                            <AdminImage
+                              src={imagesById[row.image_id].url}
+                              alt={`Image ${String(row.image_id)}`}
+                              wrapperClassName="tableThumb"
+                              compact
+                            />
                             <div className="cellSubtle">{displayValue(row[field])}</div>
                           </div>
                         ) : (
@@ -306,14 +348,22 @@ export function GenericTablePage({ resource }: { resource: AdminResource }) {
           </div>
         )}
 
-        <Pagination current={page} total={totalPages} onChange={(nextPage) => void load(nextPage)} />
+        <Pagination current={currentPage} total={totalPages} onChange={setPage} />
       </section>
 
       {drawer?.mode === "view" && (
         <Modal title={`${resource.label} details`} subtitle={resource.table} onClose={() => setDrawer(null)}>
           {viewedImageUrl && (
             <div className="detailMedia detailMediaViewer">
-              <img src={viewedImageUrl} alt="" className="detailImage" />
+              <AdminImage
+                src={viewedImageUrl}
+                alt={`${resource.label} preview`}
+                wrapperClassName="adminImageStage"
+                imageClassName="detailImage"
+                fit="contain"
+                loading="eager"
+                fallbackTitle="Image preview unavailable"
+              />
             </div>
           )}
           <div className="detailGrid">
@@ -336,7 +386,15 @@ export function GenericTablePage({ resource }: { resource: AdminResource }) {
           {editedImageUrl && (
             <div className="uploadPreviewLayout">
               <div className="detailMedia detailMediaLarge">
-                <img src={editedImageUrl} alt="" className="detailImage" />
+                <AdminImage
+                  src={editedImageUrl}
+                  alt={`${resource.label} linked image`}
+                  wrapperClassName="adminImageStage"
+                  imageClassName="detailImage"
+                  fit="contain"
+                  loading="eager"
+                  fallbackTitle="Linked image unavailable"
+                />
               </div>
               <div className="detailGrid detailGridCompact">
                 <div>

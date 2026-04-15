@@ -1,13 +1,18 @@
 "use client";
 
-/* eslint-disable @next/next/no-img-element */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
+import { AdminImage } from "@/components/admin/admin-image";
 import { useAdmin } from "@/components/admin/admin-provider";
 import { ImageUploadModal } from "@/components/admin/image-upload-modal";
+import { useAdminTableController } from "@/components/admin/use-admin-table-controller";
 import { BooleanChoice, EmptyState, Modal, PageHeader, Pagination, StatusBanner } from "@/components/admin/ui";
-import { formatDate, initFormState, shortId, validateRequiredFields } from "@/lib/admin-ui";
+import { validateRemoteImageUrl } from "@/lib/admin-images";
+import { formatDate, initFormState, matchesSearchQuery, shortId, validateRequiredFields } from "@/lib/admin-ui";
 import {
   deleteImage,
+  listAllCaptions,
+  listAllImages,
+  listAllTableRows,
   listCaptionExamplesByImageIds,
   listCaptionsByImageIds,
   listImages,
@@ -40,96 +45,130 @@ type LinkedCaption = {
   priority?: number | null;
 };
 
+type CaptionExampleRow = GenericRow & {
+  id?: string | number;
+  image_id?: string;
+  caption?: string;
+  priority?: number | null;
+  modified_datetime_utc?: string | null;
+};
+
+function buildLinkedCaptionsMap(captionRows: CaptionRow[], exampleRows: CaptionExampleRow[]) {
+  const mapped: Record<string, LinkedCaption[]> = {};
+
+  for (const row of captionRows) {
+    if (!mapped[row.image_id]) mapped[row.image_id] = [];
+    mapped[row.image_id].push({
+      id: row.id,
+      text: row.content,
+      source: "caption",
+      createdAt: row.created_datetime_utc,
+      likeCount: row.like_count,
+    });
+  }
+
+  for (const row of exampleRows) {
+    const imageId = typeof row.image_id === "string" ? row.image_id : "";
+    const caption = typeof row.caption === "string" ? row.caption : "";
+    if (!imageId || !caption) continue;
+    if (!mapped[imageId]) mapped[imageId] = [];
+    mapped[imageId].push({
+      id: String(row.id ?? caption),
+      text: caption,
+      source: "example",
+      createdAt: typeof row.modified_datetime_utc === "string" ? row.modified_datetime_utc : null,
+      priority: typeof row.priority === "number" ? row.priority : null,
+    });
+  }
+
+  return mapped;
+}
+
 export function ImagesPage() {
   const { me, token } = useAdmin();
-  const [rows, setRows] = useState<ImageRow[]>([]);
-  const [captionsByImageId, setCaptionsByImageId] = useState<Record<string, LinkedCaption[]>>({});
-  const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [query, setQuery] = useState("");
   const [drawer, setDrawer] = useState<ImageDrawerState>(null);
   const [editForm, setEditForm] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-
-  const load = useCallback(async (nextPage = page) => {
-    if (!token) return;
-
-    try {
-      setLoading(true);
-      setError(null);
-      const images = await listImages(token, nextPage, PAGE_SIZE);
-      setRows(images.rows);
-      setTotal(images.total);
-      setPage(images.page);
-
-      const imageIds = images.rows.map((row) => row.id);
-      const [captionRows, exampleRows] = await Promise.all([
-        listCaptionsByImageIds(token, imageIds),
-        listCaptionExamplesByImageIds(token, imageIds),
-      ]);
-
-      const mapped: Record<string, LinkedCaption[]> = {};
-      for (const row of captionRows) {
-        const captionRow = row as CaptionRow;
-        const caption = captionRow.content;
-        if (!mapped[row.image_id]) mapped[row.image_id] = [];
-        if (caption) {
-          mapped[row.image_id].push({
-            id: captionRow.id,
-            text: caption,
-            source: "caption",
-            createdAt: captionRow.created_datetime_utc,
-            likeCount: captionRow.like_count,
-          });
-        }
-      }
-      for (const row of exampleRows) {
-        const imageId = String(row.image_id ?? "");
-        const caption = typeof row.caption === "string" ? row.caption : "";
-        if (!imageId || !caption) continue;
-        if (!mapped[imageId]) mapped[imageId] = [];
-        mapped[imageId].push({
-          id: String(row.id ?? caption),
-          text: caption,
-          source: "example",
-          createdAt: typeof row.modified_datetime_utc === "string" ? row.modified_datetime_utc : null,
-          priority: typeof row.priority === "number" ? row.priority : null,
-        });
-      }
-
-      setCaptionsByImageId(mapped);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Failed to load images.");
-    } finally {
-      setLoading(false);
+  const fetchPage = useCallback(async (nextPage: number) => {
+    if (!token) {
+      return { rows: [], total: 0, page: 1, extra: {} as Record<string, LinkedCaption[]> };
     }
-  }, [page, token]);
 
-  useEffect(() => {
-    void load(1);
-  }, [load]);
+    const images = await listImages(token, nextPage, PAGE_SIZE);
+    const imageIds = images.rows.map((row) => row.id);
+    const [captionRows, exampleRows] = await Promise.all([
+      listCaptionsByImageIds(token, imageIds),
+      listCaptionExamplesByImageIds(token, imageIds),
+    ]);
 
-  const filteredRows = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return rows;
-    return rows.filter((row) => {
-      const captions = (captionsByImageId[row.id] ?? [])
-        .map((caption) => caption.text)
-        .join(" ")
-        .toLowerCase();
-      return (
-        row.id.toLowerCase().includes(normalized) ||
-        row.profile_id.toLowerCase().includes(normalized) ||
-        row.url.toLowerCase().includes(normalized) ||
-        captions.includes(normalized)
-      );
-    });
-  }, [captionsByImageId, query, rows]);
+    return {
+      rows: images.rows,
+      total: images.total,
+      page: images.page,
+      extra: buildLinkedCaptionsMap(captionRows, exampleRows as CaptionExampleRow[]),
+    };
+  }, [token]);
+
+  const fetchAll = useCallback(async () => {
+    if (!token) {
+      return { rows: [], extra: {} as Record<string, LinkedCaption[]> };
+    }
+
+    const [allImages, allCaptions, allExamples] = await Promise.all([
+      listAllImages(token),
+      listAllCaptions(token),
+      listAllTableRows(
+        token,
+        "caption_examples",
+        "id,image_id,caption,priority,modified_datetime_utc",
+        "priority.asc.nullslast",
+      ),
+    ]);
+
+    return {
+      rows: allImages,
+      extra: buildLinkedCaptionsMap(allCaptions, allExamples as CaptionExampleRow[]),
+    };
+  }, [token]);
+
+  const {
+    currentPage,
+    error,
+    extra,
+    loading,
+    query,
+    rows,
+    searchActive,
+    setError,
+    setPage,
+    setQuery,
+    total,
+    totalPages,
+    updateRows,
+    refresh,
+  } = useAdminTableController<ImageRow, Record<string, LinkedCaption[]>>({
+    token,
+    pageSize: PAGE_SIZE,
+    loadErrorMessage: "Failed to load images.",
+    fetchPage,
+    fetchAll,
+    filterRows: useCallback(
+      (inputRows, currentQuery, captionsByImageId) =>
+        inputRows.filter((row) =>
+          matchesSearchQuery(
+            {
+              ...row,
+              linked_captions: (captionsByImageId?.[row.id] ?? []).map((caption) => caption.text),
+            },
+            currentQuery,
+          ),
+        ),
+      [],
+    ),
+  });
+  const captionsByImageId = extra ?? {};
 
   const openEdit = (image: ImageRow) => {
     setEditForm(initFormState(IMAGE_FIELDS, image as unknown as GenericRow));
@@ -143,7 +182,7 @@ export function ImagesPage() {
       setError(null);
       setSuccess(null);
       await updateImagePublic(token, image.id, isPublic);
-      setRows((current) => current.map((row) => (row.id === image.id ? { ...row, is_public: isPublic } : row)));
+      updateRows((row) => (row.id === image.id ? { ...row, is_public: isPublic } : row));
       setDrawer((current) =>
         current?.mode && "image" in current && current.image.id === image.id
           ? { ...current, image: { ...current.image, is_public: isPublic } }
@@ -163,14 +202,15 @@ export function ImagesPage() {
       setError(null);
       setSuccess(null);
       validateRequiredFields(IMAGE_FIELDS, editForm);
+      const { url: normalizedUrl } = await validateRemoteImageUrl(editForm.url.trim());
       await updateTableRowByField(token, "images", "id", drawer.image.id, {
         profile_id: editForm.profile_id.trim(),
-        url: editForm.url.trim(),
+        url: normalizedUrl,
         is_public: editForm.is_public === "true",
       });
       setSuccess(`Saved image ${shortId(drawer.image.id)}.`);
       setDrawer(null);
-      await load(page);
+      refresh(currentPage);
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "Failed to save image.");
     } finally {
@@ -188,7 +228,7 @@ export function ImagesPage() {
       setSuccess(null);
       await deleteImage(token, image.id);
       setSuccess(`Deleted image ${shortId(image.id)}.`);
-      await load(rows.length === 1 && page > 1 ? page - 1 : page);
+      refresh(rows.length === 1 && currentPage > 1 ? currentPage - 1 : currentPage);
       setDrawer((current) => (current?.mode && "image" in current && current.image.id === image.id ? null : current));
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "Failed to delete image.");
@@ -207,7 +247,7 @@ export function ImagesPage() {
         description="Upload, inspect, edit, and delete image rows with actual previews and linked caption context."
         actions={
           <div className="headerActions">
-            <button type="button" className="secondaryButton" onClick={() => void load(page)}>
+            <button type="button" className="secondaryButton" onClick={() => refresh(currentPage)}>
               Refresh
             </button>
             <button type="button" className="primaryButton" onClick={() => setDrawer({ mode: "upload" })}>
@@ -220,24 +260,30 @@ export function ImagesPage() {
       <StatusBanner kind="error" message={error} onDismiss={() => setError(null)} />
       <StatusBanner kind="success" message={success} onDismiss={() => setSuccess(null)} />
 
-      <section className="panelCard">
+      <section className="panelCard tablePanel">
         <div className="toolbar">
           <input
             className="searchInput"
             type="search"
-            placeholder="Search image id, owner id, URL, or caption text"
+            placeholder="Search any image id, owner id, URL, or linked caption match"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
-          <p className="supporting">{filteredRows.length} results on this page</p>
+          <p className="supporting">
+            {searchActive
+              ? `${total} matching image result${total === 1 ? "" : "s"}`
+              : `${total} total image${total === 1 ? "" : "s"}`}
+          </p>
         </div>
 
         {loading ? (
           <div className="tableLoading">Loading images…</div>
-        ) : filteredRows.length === 0 ? (
+        ) : rows.length === 0 ? (
           <EmptyState
-            title="No images found"
-            description="Upload a new image or adjust the current search."
+            title={searchActive ? "No matching images" : "No images found"}
+            description={
+              searchActive ? "Try a broader search or clear the current query." : "Upload a new image to populate this table."
+            }
             action={
               <button type="button" className="primaryButton" onClick={() => setDrawer({ mode: "upload" })}>
                 Upload image
@@ -258,14 +304,17 @@ export function ImagesPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.map((row) => {
+                {rows.map((row) => {
                   const linkedCaptions = captionsByImageId[row.id] ?? [];
                   return (
                     <tr key={row.id}>
                       <td>
-                        <div className="thumbCell">
-                          <img src={row.url} alt="" className="tableThumb" />
-                        </div>
+                        <AdminImage
+                          src={row.url}
+                          alt={`Image ${shortId(row.id)}`}
+                          wrapperClassName="tableThumb"
+                          compact
+                        />
                       </td>
                       <td>
                         <div className="cellTitle">{shortId(row.id)}</div>
@@ -318,7 +367,7 @@ export function ImagesPage() {
           </div>
         )}
 
-        <Pagination current={page} total={totalPages} onChange={(nextPage) => void load(nextPage)} />
+        <Pagination current={currentPage} total={totalPages} onChange={setPage} />
       </section>
 
       {drawer?.mode === "upload" && (
@@ -327,7 +376,7 @@ export function ImagesPage() {
           onClose={() => setDrawer(null)}
           onUploaded={async (message) => {
             setSuccess(message);
-            await load(1);
+            refresh(1);
           }}
         />
       )}
@@ -335,7 +384,15 @@ export function ImagesPage() {
       {drawer?.mode === "view" && (
         <Modal title="Image details" subtitle={drawer.image.url} onClose={() => setDrawer(null)}>
           <div className="detailMedia detailMediaViewer">
-            <img src={drawer.image.url} alt="" className="detailImage" />
+            <AdminImage
+              src={drawer.image.url}
+              alt={`Image ${drawer.image.id}`}
+              wrapperClassName="adminImageStage"
+              imageClassName="detailImage"
+              fit="contain"
+              loading="eager"
+              fallbackTitle="Image preview unavailable"
+            />
           </div>
           <dl className="detailGrid">
             <div>
@@ -396,7 +453,15 @@ export function ImagesPage() {
           {editPreviewUrl && (
             <div className="uploadPreviewLayout">
               <div className="detailMedia detailMediaLarge">
-                <img src={editPreviewUrl} alt="" className="detailImage" />
+                <AdminImage
+                  src={editPreviewUrl}
+                  alt={`Preview for ${drawer.image.id}`}
+                  wrapperClassName="adminImageStage"
+                  imageClassName="detailImage"
+                  fit="contain"
+                  loading="eager"
+                  fallbackTitle="Preview unavailable"
+                />
               </div>
               <div className="detailGrid detailGridCompact">
                 <div>

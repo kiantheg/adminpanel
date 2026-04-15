@@ -6,6 +6,50 @@ export function shortId(id: string | null | undefined) {
   return `${id.slice(0, 8)}...${id.slice(-4)}`;
 }
 
+export function normalizeSearchQuery(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function flattenSearchValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    return value.map((entry) => flattenSearchValue(entry)).join(" ");
+  }
+  if (typeof value === "object") {
+    return Object.values(value as Record<string, unknown>)
+      .map((entry) => flattenSearchValue(entry))
+      .join(" ");
+  }
+  return String(value);
+}
+
+export function matchesSearchQuery(value: unknown, query: string) {
+  const normalizedQuery = normalizeSearchQuery(query);
+  if (!normalizedQuery) return true;
+  const haystack = normalizeSearchQuery(flattenSearchValue(value));
+  return normalizedQuery.split(" ").every((token) => haystack.includes(token));
+}
+
+export function clampPage(page: number, totalPages: number) {
+  return Math.min(Math.max(1, page), Math.max(1, totalPages));
+}
+
+export function paginateRows<T>(rows: T[], page: number, pageSize: number) {
+  const safePageSize = Math.max(1, pageSize);
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / safePageSize));
+  const safePage = clampPage(page, totalPages);
+  const start = (safePage - 1) * safePageSize;
+  return {
+    rows: rows.slice(start, start + safePageSize),
+    page: safePage,
+    total,
+    totalPages,
+  };
+}
+
 export function formatDate(value: string | null | undefined) {
   if (!value) return "-";
   const date = new Date(value);

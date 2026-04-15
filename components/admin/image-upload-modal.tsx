@@ -1,9 +1,17 @@
 "use client";
 
-/* eslint-disable @next/next/no-img-element */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AdminImage } from "@/components/admin/admin-image";
 import { useAdmin } from "@/components/admin/admin-provider";
 import { BooleanChoice, Modal, StatusBanner } from "@/components/admin/ui";
+import {
+  getImageFormatLabel,
+  inferImageFormatFromUrl,
+  supportedImageFormatsLabel,
+  supportedImageUploadAccept,
+  validateImageFile,
+  validateRemoteImageUrl,
+} from "@/lib/admin-images";
 import { missingSupabaseMessage, supabase } from "@/lib/supabase-browser";
 import { insertTableRow } from "@/lib/supabase-rest";
 
@@ -41,6 +49,7 @@ export function ImageUploadModal({
   const [prefix, setPrefix] = useState("admin");
   const [urlValue, setUrlValue] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFileFormat, setSelectedFileFormat] = useState<string | null>(null);
   const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -79,16 +88,46 @@ export function ImageUploadModal({
     return urlValue.trim() ? fileNameFromUrl(urlValue.trim()) : null;
   }, [mode, selectedFile, urlValue]);
 
+  const previewFormat = useMemo(() => {
+    if (mode === "file") {
+      return selectedFileFormat;
+    }
+    const format = inferImageFormatFromUrl(urlValue.trim());
+    return format === "unknown" ? null : getImageFormatLabel(format);
+  }, [mode, selectedFileFormat, urlValue]);
+
   const clearTransientState = () => {
     setError(null);
     setProgress(0);
     setProgressLabel(null);
   };
 
-  const handleFileSelection = (file: File | null) => {
-    setSelectedFile(file);
+  const handleFileSelection = async (file: File | null) => {
     setMode("file");
     clearTransientState();
+
+    if (!file) {
+      setSelectedFile(null);
+      setSelectedFileFormat(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+      return;
+    }
+
+    const validation = await validateImageFile(file);
+    if (!validation.ok) {
+      setSelectedFile(null);
+      setSelectedFileFormat(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+      setError(validation.error);
+      return;
+    }
+
+    setSelectedFile(file);
+    setSelectedFileFormat(validation.label);
   };
 
   const handleSubmit = async () => {
@@ -106,11 +145,7 @@ export function ImageUploadModal({
       setBusy(true);
 
       if (mode === "url") {
-        const normalizedUrl = urlValue.trim();
-        if (!normalizedUrl) {
-          throw new Error("Image URL is required.");
-        }
-        new URL(normalizedUrl);
+        const { url: normalizedUrl } = await validateRemoteImageUrl(urlValue);
 
         setProgress(35);
         setProgressLabel("Creating image row from external URL...");
@@ -180,14 +215,20 @@ export function ImageUploadModal({
         <button
           type="button"
           className={mode === "file" ? "uploadModeButton uploadModeButtonActive" : "uploadModeButton"}
-          onClick={() => setMode("file")}
+          onClick={() => {
+            setMode("file");
+            clearTransientState();
+          }}
         >
           File upload
         </button>
         <button
           type="button"
           className={mode === "url" ? "uploadModeButton uploadModeButtonActive" : "uploadModeButton"}
-          onClick={() => setMode("url")}
+          onClick={() => {
+            setMode("url");
+            clearTransientState();
+          }}
         >
           Image URL
         </button>
@@ -219,6 +260,9 @@ export function ImageUploadModal({
           <label className="field fieldFull">
             <span>Image URL</span>
             <input className="textInput" type="url" value={urlValue} onChange={(event) => setUrlValue(event.target.value)} />
+            <span className="fieldHint">
+              Use a direct public image URL. Supported browser-rendered formats include {supportedImageFormatsLabel()}.
+            </span>
           </label>
         )}
       </div>
@@ -242,11 +286,11 @@ export function ImageUploadModal({
           onDrop={(event) => {
             event.preventDefault();
             setDragActive(false);
-            handleFileSelection(event.dataTransfer.files?.[0] ?? null);
+            void handleFileSelection(event.dataTransfer.files?.[0] ?? null);
           }}
         >
           <p className="dropZoneTitle">Drag and drop an image here</p>
-          <p className="supporting">or choose a file from your device.</p>
+          <p className="supporting">Supports {supportedImageFormatsLabel()}. HEIC/HEIF works only when the browser can decode it.</p>
           <div className="dropZoneActions">
             <button type="button" className="secondaryButton" onClick={() => fileInputRef.current?.click()}>
               Choose file
@@ -256,9 +300,9 @@ export function ImageUploadModal({
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept={supportedImageUploadAccept()}
             className="hiddenInput"
-            onChange={(event) => handleFileSelection(event.target.files?.[0] ?? null)}
+            onChange={(event) => void handleFileSelection(event.target.files?.[0] ?? null)}
           />
         </div>
       )}
@@ -278,7 +322,16 @@ export function ImageUploadModal({
       {previewSrc && (
         <div className="uploadPreviewLayout">
           <div className="detailMedia detailMediaLarge">
-            <img src={previewSrc} alt={previewName ?? "Image preview"} className="detailImage" />
+            <AdminImage
+              src={previewSrc}
+              alt={previewName ?? "Image preview"}
+              wrapperClassName="adminImageStage"
+              imageClassName="detailImage"
+              fit="contain"
+              loading="eager"
+              fallbackTitle="Preview unavailable"
+              fallbackHint="This image could not be previewed here. Use a direct image URL or convert the file to JPG, PNG, WEBP, GIF, SVG, BMP, or AVIF."
+            />
           </div>
           <div className="detailGrid detailGridCompact">
             <div>
@@ -289,6 +342,12 @@ export function ImageUploadModal({
               <div>
                 <dt>{mode === "file" ? "Filename" : "Resolved name"}</dt>
                 <dd>{previewName}</dd>
+              </div>
+            )}
+            {previewFormat && (
+              <div>
+                <dt>Detected format</dt>
+                <dd>{previewFormat}</dd>
               </div>
             )}
             {mode === "file" && selectedFile && (

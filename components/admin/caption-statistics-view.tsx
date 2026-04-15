@@ -1,8 +1,8 @@
 "use client";
 
-/* eslint-disable @next/next/no-img-element */
 import Link from "next/link";
 import type { CSSProperties } from "react";
+import { AdminImage } from "@/components/admin/admin-image";
 import { EmptyState, PageHeader, StatusBanner } from "@/components/admin/ui";
 import { useCaptionStatistics } from "@/components/admin/use-caption-statistics";
 import type { CaptionStatRow, RecentRatingActivity, VoteDistributionBucket } from "@/lib/caption-statistics";
@@ -414,7 +414,14 @@ function CaptionTable({
               <tr key={row.captionId}>
                 <td>
                   <div className="analyticsCaptionCell">
-                    {row.imageUrl ? <img src={row.imageUrl} alt="" className="tableThumb" /> : null}
+                    {row.imageUrl ? (
+                      <AdminImage
+                        src={row.imageUrl}
+                        alt={`Image ${shortId(row.captionId)}`}
+                        wrapperClassName="tableThumb"
+                        compact
+                      />
+                    ) : null}
                     <div>
                       <p className="cellTitle">{row.content}</p>
                       <p className="cellSubtle">Caption {shortId(row.captionId)}</p>
@@ -450,9 +457,12 @@ function RecentActivityCard({ rows }: { rows: RecentRatingActivity[] }) {
         {rows.map((row) => (
           <div key={`${row.captionId}-${row.createdAt}-${row.profileId}`} className="activityRow">
             {row.imageUrl ? (
-              <div className="activityThumb">
-                <img src={row.imageUrl} alt="" />
-              </div>
+              <AdminImage
+                src={row.imageUrl}
+                alt={`Image ${shortId(row.captionId)}`}
+                wrapperClassName="activityThumb"
+                compact
+              />
             ) : (
               <div className="thumbPlaceholder">No image</div>
             )}

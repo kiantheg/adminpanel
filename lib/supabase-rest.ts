@@ -105,6 +105,9 @@ export type PagedResult<T> = {
   pageSize: number;
 };
 
+const MAX_PAGE_SIZE = 200;
+const FIELD_IN_CHUNK_SIZE = 50;
+
 export async function signInWithPassword(email: string, password: string) {
   return await supabaseRequest<AuthSession>("/auth/v1/token", {
     method: "POST",
@@ -161,7 +164,7 @@ async function pagedSelect<T>(
 ) {
   const { url, anonKey } = getSupabaseConfig();
   const safePage = Math.max(1, page);
-  const safePageSize = Math.min(Math.max(1, pageSize), 200);
+  const safePageSize = Math.min(Math.max(1, pageSize), MAX_PAGE_SIZE);
   const from = (safePage - 1) * safePageSize;
   const to = from + safePageSize - 1;
   const orderQuery = order ? `&order=${encodeURIComponent(order)}` : "";
@@ -196,6 +199,30 @@ async function pagedSelect<T>(
   };
 }
 
+async function listAllRows<T>(
+  token: string,
+  table: string,
+  select: string,
+  order: string | null,
+  pageSize = MAX_PAGE_SIZE,
+) {
+  const rows: T[] = [];
+  let page = 1;
+
+  while (true) {
+    const result = await pagedSelect<T>(token, table, select, order, page, pageSize);
+    rows.push(...result.rows);
+
+    if (rows.length >= result.total || result.rows.length < result.pageSize) {
+      break;
+    }
+
+    page += 1;
+  }
+
+  return rows;
+}
+
 export async function listProfiles(token: string, page = 1, pageSize = 20): Promise<PagedResult<Profile>> {
   const result = await pagedSelect<Profile>(
     token,
@@ -211,6 +238,15 @@ export async function listProfiles(token: string, page = 1, pageSize = 20): Prom
     page: result.page,
     pageSize: result.pageSize,
   };
+}
+
+export async function listAllProfiles(token: string) {
+  return await listAllRows<Profile>(
+    token,
+    "profiles",
+    "id,email,first_name,last_name,is_superadmin,created_datetime_utc",
+    "created_datetime_utc.desc.nullslast",
+  );
 }
 
 export async function listImages(token: string, page = 1, pageSize = 24): Promise<PagedResult<ImageRow>> {
@@ -230,6 +266,15 @@ export async function listImages(token: string, page = 1, pageSize = 24): Promis
   };
 }
 
+export async function listAllImages(token: string) {
+  return await listAllRows<ImageRow>(
+    token,
+    "images",
+    "id,profile_id,url,is_public,created_datetime_utc,modified_datetime_utc",
+    "created_datetime_utc.desc.nullslast",
+  );
+}
+
 export async function listCaptions(token: string, page = 1, pageSize = 24): Promise<PagedResult<CaptionRow>> {
   const result = await pagedSelect<CaptionRow>(
     token,
@@ -245,6 +290,15 @@ export async function listCaptions(token: string, page = 1, pageSize = 24): Prom
     page: result.page,
     pageSize: result.pageSize,
   };
+}
+
+export async function listAllCaptions(token: string) {
+  return await listAllRows<CaptionRow>(
+    token,
+    "captions",
+    "id,profile_id,image_id,content,is_public,like_count,created_datetime_utc",
+    "created_datetime_utc.desc.nullslast",
+  );
 }
 
 export async function countCaptionVotes(token: string) {
@@ -336,6 +390,16 @@ export async function listTableRows(
   };
 }
 
+export async function listAllTableRows(
+  token: string,
+  table: string,
+  select = "*",
+  order: string | null = null,
+  pageSize = MAX_PAGE_SIZE,
+) {
+  return await listAllRows<GenericRow>(token, table, select, order, pageSize);
+}
+
 export async function insertTableRow(
   token: string,
   table: string,
@@ -401,12 +465,25 @@ export async function listTableRowsByFieldIn(
     return [] as GenericRow[];
   }
 
-  return await supabaseRequest<GenericRow[]>(`/rest/v1/${table}`, {
-    token,
-    query: `select=${select}&${encodeURIComponent(field)}=in.(${encodeURIComponent(
-      encodeInFilter(values),
-    )})${order ? `&order=${encodeURIComponent(order)}` : ""}`,
-  });
+  const uniqueValues = [...new Map(values.map((value) => [`${typeof value}:${String(value)}`, value])).values()];
+  const chunks: Array<Array<string | number | boolean>> = [];
+
+  for (let index = 0; index < uniqueValues.length; index += FIELD_IN_CHUNK_SIZE) {
+    chunks.push(uniqueValues.slice(index, index + FIELD_IN_CHUNK_SIZE));
+  }
+
+  const results = await Promise.all(
+    chunks.map((chunk) =>
+      supabaseRequest<GenericRow[]>(`/rest/v1/${table}`, {
+        token,
+        query: `select=${select}&${encodeURIComponent(field)}=in.(${encodeURIComponent(
+          encodeInFilter(chunk),
+        )})${order ? `&order=${encodeURIComponent(order)}` : ""}`,
+      }),
+    ),
+  );
+
+  return results.flat();
 }
 
 export async function listImagesByIds(token: string, ids: string[]) {

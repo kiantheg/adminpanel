@@ -206,7 +206,11 @@ export function BooleanChoice({
   compact?: boolean;
 }) {
   return (
-    <div className={compact ? "booleanChoice booleanChoiceCompact" : "booleanChoice"} role="group">
+    <div
+      className={compact ? "booleanChoice booleanChoiceCompact" : "booleanChoice"}
+      role="group"
+      data-state={value ? "true" : "false"}
+    >
       <span
         aria-hidden="true"
         className={value ? "booleanChoiceIndicator" : "booleanChoiceIndicator booleanChoiceIndicatorRight"}
@@ -214,6 +218,7 @@ export function BooleanChoice({
       <button
         type="button"
         className={value ? "booleanChoiceButton booleanChoiceButtonActive" : "booleanChoiceButton"}
+        data-active={value ? "true" : "false"}
         onClick={() => onChange(true)}
         aria-pressed={value}
         disabled={disabled}
@@ -223,6 +228,7 @@ export function BooleanChoice({
       <button
         type="button"
         className={!value ? "booleanChoiceButton booleanChoiceButtonActive" : "booleanChoiceButton"}
+        data-active={!value ? "true" : "false"}
         onClick={() => onChange(false)}
         aria-pressed={!value}
         disabled={disabled}

@@ -1,58 +1,68 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { useAdmin } from "@/components/admin/admin-provider";
+import { useAdminTableController } from "@/components/admin/use-admin-table-controller";
 import { BooleanChoice, EmptyState, Modal, PageHeader, Pagination, StatusBanner } from "@/components/admin/ui";
-import { formatDate, shortId } from "@/lib/admin-ui";
-import { listProfiles, updateProfileFlags, type Profile } from "@/lib/supabase-rest";
+import { formatDate, matchesSearchQuery, shortId } from "@/lib/admin-ui";
+import { listAllProfiles, listProfiles, updateProfileFlags, type Profile } from "@/lib/supabase-rest";
 
 const PAGE_SIZE = 20;
 
 export function ProfilesPage() {
   const { token } = useAdmin();
-  const [rows, setRows] = useState<Profile[]>([]);
-  const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-
-  const load = useCallback(async (nextPage = page) => {
-    if (!token) return;
-    try {
-      setLoading(true);
-      setError(null);
-      const result = await listProfiles(token, nextPage, PAGE_SIZE);
-      setRows(result.rows);
-      setTotal(result.total);
-      setPage(result.page);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Failed to load profiles.");
-    } finally {
-      setLoading(false);
+  const fetchPage = useCallback(async (nextPage: number) => {
+    if (!token) {
+      return { rows: [], total: 0, page: 1, extra: null };
     }
-  }, [page, token]);
+    const result = await listProfiles(token, nextPage, PAGE_SIZE);
+    return { rows: result.rows, total: result.total, page: result.page, extra: null };
+  }, [token]);
 
-  useEffect(() => {
-    void load(1);
-  }, [load]);
+  const fetchAll = useCallback(async () => {
+    if (!token) {
+      return { rows: [], extra: null };
+    }
+    return { rows: await listAllProfiles(token), extra: null };
+  }, [token]);
 
-  const filteredRows = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return rows;
-    return rows.filter((row) => {
-      const fullName = `${row.first_name ?? ""} ${row.last_name ?? ""}`.toLowerCase();
-      return (
-        fullName.includes(normalized) ||
-        (row.email ?? "").toLowerCase().includes(normalized) ||
-        row.id.toLowerCase().includes(normalized)
-      );
-    });
-  }, [query, rows]);
+  const {
+    currentPage,
+    error,
+    loading,
+    query,
+    rows,
+    searchActive,
+    setError,
+    setPage,
+    setQuery,
+    total,
+    totalPages,
+    updateRows,
+    refresh,
+  } = useAdminTableController<Profile, null>({
+    token,
+    pageSize: PAGE_SIZE,
+    loadErrorMessage: "Failed to load profiles.",
+    fetchPage,
+    fetchAll,
+    filterRows: useCallback(
+      (inputRows, currentQuery) =>
+        inputRows.filter((row) =>
+          matchesSearchQuery(
+            {
+              ...row,
+              full_name: `${row.first_name ?? ""} ${row.last_name ?? ""}`,
+            },
+            currentQuery,
+          ),
+        ),
+      [],
+    ),
+  });
 
   const toggleSuperAdmin = async (row: Profile, value: boolean) => {
     if (!token) return;
@@ -60,9 +70,7 @@ export function ProfilesPage() {
       setError(null);
       setSuccess(null);
       await updateProfileFlags(token, row.id, { is_superadmin: value });
-      setRows((current) =>
-        current.map((entry) => (entry.id === row.id ? { ...entry, is_superadmin: value } : entry)),
-      );
+      updateRows((entry) => (entry.id === row.id ? { ...entry, is_superadmin: value } : entry));
       setSelected((current) => (current?.id === row.id ? { ...current, is_superadmin: value } : current));
       setSuccess(`Updated superadmin access for ${row.email ?? shortId(row.id)}.`);
     } catch (actionError) {
@@ -78,7 +86,7 @@ export function ProfilesPage() {
         description="Inspect signed-up users and manage superadmin access without leaving the page."
         actions={
           <div className="headerActions">
-            <button type="button" className="secondaryButton" onClick={() => void load(page)}>
+            <button type="button" className="secondaryButton" onClick={() => refresh(currentPage)}>
               Refresh
             </button>
           </div>
@@ -88,26 +96,30 @@ export function ProfilesPage() {
       <StatusBanner kind="error" message={error} onDismiss={() => setError(null)} />
       <StatusBanner kind="success" message={success} onDismiss={() => setSuccess(null)} />
 
-      <section className="panelCard">
+      <section className="panelCard tablePanel">
         <div className="toolbar">
           <input
             className="searchInput"
             type="search"
-            placeholder="Search name, email, or profile id"
+            placeholder="Search any name, email, or profile id match"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
           <p className="supporting">
-            {filteredRows.length} result{filteredRows.length === 1 ? "" : "s"} on this page
+            {searchActive
+              ? `${total} matching result${total === 1 ? "" : "s"}`
+              : `${total} total profile${total === 1 ? "" : "s"}`}
           </p>
         </div>
 
         {loading ? (
           <div className="tableLoading">Loading profiles…</div>
-        ) : filteredRows.length === 0 ? (
+        ) : rows.length === 0 ? (
           <EmptyState
-            title="No profiles on this page"
-            description="Try a different search or move to another page."
+            title={searchActive ? "No matching profiles" : "No profiles found"}
+            description={
+              searchActive ? "Try a broader search or clear the current query." : "Profiles will appear here once data is available."
+            }
           />
         ) : (
           <div className="tableCard">
@@ -122,7 +134,7 @@ export function ProfilesPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.map((row) => (
+                {rows.map((row) => (
                   <tr key={row.id}>
                     <td>
                       <div className="cellTitle">{`${row.first_name ?? ""} ${row.last_name ?? ""}`.trim() || "-"}</div>
@@ -151,7 +163,7 @@ export function ProfilesPage() {
           </div>
         )}
 
-        <Pagination current={page} total={totalPages} onChange={(nextPage) => void load(nextPage)} />
+        <Pagination current={currentPage} total={totalPages} onChange={setPage} />
       </section>
 
       {selected && (

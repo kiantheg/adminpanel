@@ -1,18 +1,21 @@
 "use client";
 
-/* eslint-disable @next/next/no-img-element */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
+import { AdminImage } from "@/components/admin/admin-image";
 import { useAdmin } from "@/components/admin/admin-provider";
+import { useAdminTableController } from "@/components/admin/use-admin-table-controller";
 import { BooleanChoice, EmptyState, Modal, PageHeader, Pagination, StatusBanner } from "@/components/admin/ui";
 import {
   formatDate,
   initFormState,
+  matchesSearchQuery,
   shortId,
   validateRequiredFields,
 } from "@/lib/admin-ui";
 import {
   deleteCaption,
   insertTableRow,
+  listAllCaptions,
   listCaptions,
   listImagesByIds,
   updateCaptionPublic,
@@ -38,61 +41,83 @@ type CaptionDrawerState =
 
 export function CaptionsPage() {
   const { me, token } = useAdmin();
-  const [rows, setRows] = useState<CaptionRow[]>([]);
-  const [imagesById, setImagesById] = useState<Record<string, ImageRow>>({});
-  const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [query, setQuery] = useState("");
   const [drawer, setDrawer] = useState<CaptionDrawerState>(null);
   const [form, setForm] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-
-  const load = useCallback(async (nextPage = page) => {
-    if (!token) return;
-
-    try {
-      setLoading(true);
-      setError(null);
-      const captions = await listCaptions(token, nextPage, PAGE_SIZE);
-      setRows(captions.rows);
-      setTotal(captions.total);
-      setPage(captions.page);
-
-      const images = await listImagesByIds(
-        token,
-        [...new Set(captions.rows.map((row) => row.image_id).filter(Boolean))],
-      );
-      setImagesById(Object.fromEntries(images.map((image) => [image.id, image])));
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Failed to load captions.");
-    } finally {
-      setLoading(false);
+  const fetchPage = useCallback(async (nextPage: number) => {
+    if (!token) {
+      return { rows: [], total: 0, page: 1, extra: {} as Record<string, ImageRow> };
     }
-  }, [page, token]);
 
-  useEffect(() => {
-    void load(1);
-  }, [load]);
+    const captions = await listCaptions(token, nextPage, PAGE_SIZE);
+    const images = await listImagesByIds(
+      token,
+      [...new Set(captions.rows.map((row) => row.image_id).filter(Boolean))],
+    );
 
-  const filteredRows = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return rows;
-    return rows.filter((row) => {
-      const imageUrl = imagesById[row.image_id]?.url ?? "";
-      return (
-        row.id.toLowerCase().includes(normalized) ||
-        row.image_id.toLowerCase().includes(normalized) ||
-        row.profile_id.toLowerCase().includes(normalized) ||
-        row.content.toLowerCase().includes(normalized) ||
-        imageUrl.toLowerCase().includes(normalized)
-      );
-    });
-  }, [imagesById, query, rows]);
+    return {
+      rows: captions.rows,
+      total: captions.total,
+      page: captions.page,
+      extra: Object.fromEntries(images.map((image) => [image.id, image])),
+    };
+  }, [token]);
+
+  const fetchAll = useCallback(async () => {
+    if (!token) {
+      return { rows: [], extra: {} as Record<string, ImageRow> };
+    }
+
+    const captions = await listAllCaptions(token);
+    const images = await listImagesByIds(
+      token,
+      [...new Set(captions.map((row) => row.image_id).filter(Boolean))],
+    );
+
+    return {
+      rows: captions,
+      extra: Object.fromEntries(images.map((image) => [image.id, image])),
+    };
+  }, [token]);
+
+  const {
+    currentPage,
+    error,
+    extra,
+    loading,
+    query,
+    rows,
+    searchActive,
+    setError,
+    setPage,
+    setQuery,
+    total,
+    totalPages,
+    updateRows,
+    refresh,
+  } = useAdminTableController<CaptionRow, Record<string, ImageRow>>({
+    token,
+    pageSize: PAGE_SIZE,
+    loadErrorMessage: "Failed to load captions.",
+    fetchPage,
+    fetchAll,
+    filterRows: useCallback(
+      (inputRows, currentQuery, imagesById) =>
+        inputRows.filter((row) =>
+          matchesSearchQuery(
+            {
+              ...row,
+              image_url: imagesById?.[row.image_id]?.url ?? "",
+            },
+            currentQuery,
+          ),
+        ),
+      [],
+    ),
+  });
+  const imagesById = extra ?? {};
 
   const formImage = form.image_id ? imagesById[form.image_id] : null;
 
@@ -117,8 +142,11 @@ export function CaptionsPage() {
       setError(null);
       setSuccess(null);
       await updateCaptionPublic(token, caption.id, isPublic);
-      setRows((current) =>
-        current.map((row) => (row.id === caption.id ? { ...row, is_public: isPublic } : row)),
+      updateRows((row) => (row.id === caption.id ? { ...row, is_public: isPublic } : row));
+      setDrawer((current) =>
+        current?.mode && "caption" in current && current.caption.id === caption.id
+          ? { ...current, caption: { ...current.caption, is_public: isPublic } }
+          : current,
       );
       setSuccess(`Updated visibility for caption ${shortId(caption.id)}.`);
     } catch (actionError) {
@@ -146,7 +174,7 @@ export function CaptionsPage() {
         await insertTableRow(token, "captions", payload);
         setSuccess("Created caption row.");
         setDrawer(null);
-        await load(1);
+        refresh(1);
         return;
       }
 
@@ -154,7 +182,7 @@ export function CaptionsPage() {
         await updateTableRowByField(token, "captions", "id", drawer.caption.id, payload);
         setSuccess(`Saved caption ${shortId(drawer.caption.id)}.`);
         setDrawer(null);
-        await load(page);
+        refresh(currentPage);
       }
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "Failed to save caption.");
@@ -173,7 +201,7 @@ export function CaptionsPage() {
       setSuccess(null);
       await deleteCaption(token, caption.id);
       setSuccess(`Deleted caption ${shortId(caption.id)}.`);
-      await load(rows.length === 1 && page > 1 ? page - 1 : page);
+      refresh(rows.length === 1 && currentPage > 1 ? currentPage - 1 : currentPage);
       setDrawer((current) => (current?.mode && "caption" in current && current.caption.id === caption.id ? null : current));
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "Failed to delete caption.");
@@ -190,7 +218,7 @@ export function CaptionsPage() {
         description="Review caption text with the actual image preview instead of raw image IDs."
         actions={
           <div className="headerActions">
-            <button type="button" className="secondaryButton" onClick={() => void load(page)}>
+            <button type="button" className="secondaryButton" onClick={() => refresh(currentPage)}>
               Refresh
             </button>
             <button type="button" className="primaryButton" onClick={openCreate}>
@@ -203,24 +231,30 @@ export function CaptionsPage() {
       <StatusBanner kind="error" message={error} onDismiss={() => setError(null)} />
       <StatusBanner kind="success" message={success} onDismiss={() => setSuccess(null)} />
 
-      <section className="panelCard">
+      <section className="panelCard tablePanel">
         <div className="toolbar">
           <input
             className="searchInput"
             type="search"
-            placeholder="Search caption text, image id, profile id, or linked image URL"
+            placeholder="Search any caption text, image id, profile id, or linked image URL match"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
-          <p className="supporting">{filteredRows.length} results on this page</p>
+          <p className="supporting">
+            {searchActive
+              ? `${total} matching caption result${total === 1 ? "" : "s"}`
+              : `${total} total caption${total === 1 ? "" : "s"}`}
+          </p>
         </div>
 
         {loading ? (
           <div className="tableLoading">Loading captions…</div>
-        ) : filteredRows.length === 0 ? (
+        ) : rows.length === 0 ? (
           <EmptyState
-            title="No captions found"
-            description="Create a caption or adjust the current search."
+            title={searchActive ? "No matching captions" : "No captions found"}
+            description={
+              searchActive ? "Try a broader search or clear the current query." : "Create a caption or refresh the data."
+            }
             action={
               <button type="button" className="primaryButton" onClick={openCreate}>
                 Create caption
@@ -240,15 +274,18 @@ export function CaptionsPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.map((row) => {
+                {rows.map((row) => {
                   const image = imagesById[row.image_id];
                   return (
                     <tr key={row.id}>
                       <td>
                         {image?.url ? (
-                          <div className="thumbCell">
-                            <img src={image.url} alt="" className="tableThumb" />
-                          </div>
+                          <AdminImage
+                            src={image.url}
+                            alt={`Image ${shortId(row.image_id)}`}
+                            wrapperClassName="tableThumb"
+                            compact
+                          />
                         ) : (
                           <div className="thumbPlaceholder">No image</div>
                         )}
@@ -293,14 +330,22 @@ export function CaptionsPage() {
           </div>
         )}
 
-        <Pagination current={page} total={totalPages} onChange={(nextPage) => void load(nextPage)} />
+        <Pagination current={currentPage} total={totalPages} onChange={setPage} />
       </section>
 
       {drawer?.mode === "view" && (
         <Modal title="Caption details" subtitle={drawer.caption.id} onClose={() => setDrawer(null)}>
           {imagesById[drawer.caption.image_id]?.url ? (
             <div className="detailMedia detailMediaViewer">
-              <img src={imagesById[drawer.caption.image_id].url} alt="" className="detailImage" />
+              <AdminImage
+                src={imagesById[drawer.caption.image_id].url}
+                alt={`Image ${drawer.caption.image_id}`}
+                wrapperClassName="adminImageStage"
+                imageClassName="detailImage"
+                fit="contain"
+                loading="eager"
+                fallbackTitle="Image preview unavailable"
+              />
             </div>
           ) : null}
           <dl className="detailGrid">
@@ -347,7 +392,15 @@ export function CaptionsPage() {
           {formImage?.url && (
             <div className="uploadPreviewLayout">
               <div className="detailMedia detailMediaLarge">
-                <img src={formImage.url} alt="" className="detailImage" />
+                <AdminImage
+                  src={formImage.url}
+                  alt={`Linked image ${formImage.id}`}
+                  wrapperClassName="adminImageStage"
+                  imageClassName="detailImage"
+                  fit="contain"
+                  loading="eager"
+                  fallbackTitle="Linked image unavailable"
+                />
               </div>
               <div className="detailGrid detailGridCompact">
                 <div>

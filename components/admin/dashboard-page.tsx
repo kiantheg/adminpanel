@@ -1,8 +1,8 @@
 "use client";
 
-/* eslint-disable @next/next/no-img-element */
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { AdminImage } from "@/components/admin/admin-image";
 import { useAdmin } from "@/components/admin/admin-provider";
 import { CaptionStatisticsDashboardSummary } from "@/components/admin/caption-statistics-view";
 import { PageHeader, StatusBanner } from "@/components/admin/ui";
@@ -125,9 +125,12 @@ export function DashboardPage() {
           <div className="activityList">
             {data?.recentImages.map((image) => (
               <div key={image.id} className="activityRow">
-                <div className="activityThumb">
-                  <img src={image.url} alt="" />
-                </div>
+                <AdminImage
+                  src={image.url}
+                  alt={`Image ${shortId(image.id)}`}
+                  wrapperClassName="activityThumb"
+                  compact
+                />
                 <div>
                   <p className="activityTitle">{shortId(image.id)}</p>
                   <p className="supporting">
